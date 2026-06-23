@@ -4,11 +4,11 @@ import {
   type DragEndEvent,
   KeyboardSensor,
   PointerSensor,
+  useDroppable,
   useSensor,
   useSensors
 } from '@dnd-kit/core'
 import {
-  arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -34,6 +34,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
+import { useI18n } from '@/i18n'
 
 import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
@@ -54,13 +55,17 @@ interface KanbanTask {
   boardId: string
   title: string
   description: string
-  status: string
-  priority: string
+  status: KanbanStatus
+  priority: KanbanPriority
   assignee: string
   createdBy: string
   createdAt: number
   updatedAt: number
   archived: boolean
+  order: number
+  labels?: string[]
+  sessionId?: string
+  source?: 'manual' | 'chat' | 'agent' | 'cron'
 }
 
 interface KanbanComment {
@@ -72,6 +77,7 @@ interface KanbanComment {
 }
 
 type KanbanStatus = 'todo' | 'ready' | 'running' | 'review' | 'done' | 'blocked'
+type KanbanPriority = 'low' | 'medium' | 'high'
 
 interface KanbanStatusColumn {
   id: KanbanStatus
@@ -96,18 +102,45 @@ const PRIORITY_CONFIG = {
 } as const
 
 // ---------------------------------------------------------------------------
+// i18n helpers
+// ---------------------------------------------------------------------------
+
+function columnLabel(t: ReturnType<typeof useI18n>['t'], id: KanbanStatus): string {
+  switch (id) {
+    case 'todo': return t.desktop.kanban.columnTodo
+    case 'ready': return t.desktop.kanban.columnReady
+    case 'running': return t.desktop.kanban.columnRunning
+    case 'review': return t.desktop.kanban.columnReview
+    case 'done': return t.desktop.kanban.columnDone
+    case 'blocked': return t.desktop.kanban.columnBlocked
+  }
+}
+
+function priorityLabel(t: ReturnType<typeof useI18n>['t'], p: string): string {
+  switch (p) {
+    case 'high': return t.desktop.kanban.priorityHigh
+    case 'medium': return t.desktop.kanban.priorityMedium
+    case 'low': return t.desktop.kanban.priorityLow
+    default: return p
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sortable task card
 // ---------------------------------------------------------------------------
 
 function SortableTaskCard({
   task,
   onEdit,
-  onDelete
+  onDelete,
+  onSelect
 }: {
   task: KanbanTask
   onEdit: (task: KanbanTask) => void
   onDelete: (task: KanbanTask) => void
+  onSelect: (task: KanbanTask) => void
 }) {
+  const { t } = useI18n()
   const {
     attributes,
     listeners,
@@ -129,11 +162,12 @@ function SortableTaskCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group cursor-default rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary) p-3 text-xs shadow-sm transition-shadow duration-100 hover:border-(--ui-stroke-tertiary)',
+        'group cursor-pointer rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary) p-3 text-xs shadow-sm transition-shadow duration-100 hover:border-(--ui-stroke-tertiary)',
         isDragging && 'z-50 shadow-lg opacity-90'
       )}
       {...attributes}
       {...listeners}
+      onClick={() => onSelect(task)}
     >
       <div className="mb-1.5 flex items-start justify-between gap-2">
         <span className="flex-1 text-sm font-medium leading-snug text-(--ui-text-primary)">
@@ -146,7 +180,7 @@ function SortableTaskCard({
               e.stopPropagation()
               onEdit(task)
             }}
-            title="Edit task"
+            title={t.desktop.kanban.editTaskTooltip}
           >
             <Codicon name="edit" size="0.75rem" />
           </button>
@@ -156,7 +190,7 @@ function SortableTaskCard({
               e.stopPropagation()
               onDelete(task)
             }}
-            title="Delete task"
+            title={t.desktop.kanban.deleteTaskTooltip}
           >
             <Codicon name="trash" size="0.75rem" />
           </button>
@@ -170,7 +204,7 @@ function SortableTaskCard({
       <div className="flex flex-wrap items-center gap-1.5">
         <Codicon name={priority.icon} size="0.75rem" className={priority.color} />
         <Badge variant="outline" className="text-[0.6rem] uppercase tracking-wider">
-          {priority.label}
+          {priorityLabel(t, task.priority)}
         </Badge>
         {task.assignee && (
           <span className="ml-auto flex items-center gap-1 text-[0.6rem] text-(--ui-text-tertiary)">
@@ -194,22 +228,28 @@ function KanbanColumn({
   column,
   tasks,
   onEditTask,
-  onDeleteTask
+  onDeleteTask,
+  onSelectTask
 }: {
   column: KanbanStatusColumn
   tasks: KanbanTask[]
   onEditTask: (task: KanbanTask) => void
   onDeleteTask: (task: KanbanTask) => void
+  onSelectTask: (task: KanbanTask) => void
 }) {
+  const { t } = useI18n()
   const taskIds = useMemo(() => tasks.map(t => t.id), [tasks])
+  const { setNodeRef: columnDroppableRef } = useDroppable({
+    id: `column:${column.id}`
+  })
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+    <div ref={columnDroppableRef} className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       {/* Column header */}
       <div className="mb-3 flex shrink-0 items-center gap-2 px-1">
         <span className={cn('h-2 w-2 shrink-0 rounded-full', column.color)} />
         <span className="text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary)">
-          {column.label}
+          {columnLabel(t, column.id)}
         </span>
         <span className="ml-auto text-[0.65rem] text-(--ui-text-tertiary)">
           {tasks.length}
@@ -220,11 +260,11 @@ function KanbanColumn({
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
         <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border border-dashed border-transparent p-1 transition-colors">
           {tasks.map(task => (
-            <SortableTaskCard key={task.id} task={task} onEdit={onEditTask} onDelete={onDeleteTask} />
+            <SortableTaskCard key={task.id} task={task} onEdit={onEditTask} onDelete={onDeleteTask} onSelect={onSelectTask} />
           ))}
           {tasks.length === 0 && (
             <div className="flex flex-1 items-center justify-center">
-              <span className="text-[0.6875rem] text-(--ui-text-tertiary/50)">Drop tasks here</span>
+              <span className="text-[0.6875rem] text-(--ui-text-tertiary/50)">{t.desktop.kanban.dropTasksHere}</span>
             </div>
           )}
         </div>
@@ -248,11 +288,12 @@ function TaskDialog({
   task: KanbanTask | null
   onSave: (data: Partial<KanbanTask> & { title: string }) => void
 }) {
+  const { t } = useI18n()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [priority, setPriority] = useState('medium')
+  const [priority, setPriority] = useState<KanbanPriority>('medium')
   const [assignee, setAssignee] = useState('')
-  const [status, setStatus] = useState<string>('todo')
+  const [status, setStatus] = useState<KanbanStatus>('todo')
 
   useEffect(() => {
     if (open) {
@@ -274,74 +315,74 @@ function TaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{task ? 'Edit Task' : 'New Task'}</DialogTitle>
+          <DialogTitle>{task ? t.desktop.kanban.editTask : t.desktop.kanban.newTask}</DialogTitle>
           <DialogDescription>
             {task ? 'Update the task details below.' : 'Create a new kanban task.'}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3 py-2">
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-(--ui-text-secondary)">Title</label>
-            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Task title" autoFocus />
+            <label className="text-xs font-medium text-(--ui-text-secondary)">{t.desktop.kanban.title}</label>
+            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder={t.desktop.kanban.taskTitlePlaceholder} autoFocus />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-(--ui-text-secondary)">Description</label>
+            <label className="text-xs font-medium text-(--ui-text-secondary)">{t.desktop.kanban.description}</label>
             <Textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Optional description…"
+              placeholder={t.desktop.kanban.descriptionPlaceholder}
               rows={3}
             />
           </div>
           <div className="flex gap-3">
             <div className="flex flex-1 flex-col gap-1">
-              <label className="text-xs font-medium text-(--ui-text-secondary)">Status</label>
+              <label className="text-xs font-medium text-(--ui-text-secondary)">{t.desktop.kanban.status}</label>
               <select
                 className={cn(
                   'h-8 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary) px-2 text-xs text-(--ui-text-primary) outline-none',
                   'focus:border-(--ui-stroke-tertiary) focus:ring-[0.125rem] focus:ring-ring/30'
                 )}
                 value={status}
-                onChange={e => setStatus(e.target.value)}
+                onChange={e => setStatus(e.target.value as KanbanStatus)}
               >
                 {STATUS_COLUMNS.map(col => (
                   <option key={col.id} value={col.id}>
-                    {col.label}
+                    {columnLabel(t, col.id)}
                   </option>
                 ))}
               </select>
             </div>
             <div className="flex flex-1 flex-col gap-1">
-              <label className="text-xs font-medium text-(--ui-text-secondary)">Priority</label>
+              <label className="text-xs font-medium text-(--ui-text-secondary)">{t.desktop.kanban.priority}</label>
               <select
                 className={cn(
                   'h-8 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary) px-2 text-xs text-(--ui-text-primary) outline-none',
                   'focus:border-(--ui-stroke-tertiary) focus:ring-[0.125rem] focus:ring-ring/30'
                 )}
                 value={priority}
-                onChange={e => setPriority(e.target.value)}
+                onChange={e => setPriority(e.target.value as KanbanPriority)}
               >
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
+                <option value="high">{t.desktop.kanban.priorityHigh}</option>
+                <option value="medium">{t.desktop.kanban.priorityMedium}</option>
+                <option value="low">{t.desktop.kanban.priorityLow}</option>
               </select>
             </div>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-(--ui-text-secondary)">Assignee</label>
+            <label className="text-xs font-medium text-(--ui-text-secondary)">{t.desktop.kanban.assignee}</label>
             <Input
               value={assignee}
               onChange={e => setAssignee(e.target.value)}
-              placeholder="Unassigned"
+              placeholder={t.desktop.kanban.unassigned}
             />
           </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t.desktop.kanban.cancel}
           </Button>
           <Button variant="default" onClick={handleSave} disabled={!title.trim()}>
-            {task ? 'Save Changes' : 'Create Task'}
+            {task ? t.desktop.kanban.saveChanges : t.desktop.kanban.createTask}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -368,8 +409,9 @@ function TaskDetailPanel({
   onAddComment: (body: string) => void
   onDeleteComment: (id: string) => void
   onArchive: () => void
-  onStatusChange: (status: string) => void
+  onStatusChange: (status: KanbanStatus) => void
 }) {
+  const { t } = useI18n()
   const [commentText, setCommentText] = useState('')
 
   const priority = PRIORITY_CONFIG[task.priority as keyof typeof PRIORITY_CONFIG] ?? PRIORITY_CONFIG.medium
@@ -385,7 +427,7 @@ function TaskDetailPanel({
     <div className="flex h-full flex-col border-l border-(--ui-stroke-secondary) bg-(--ui-bg-primary)">
       {/* Header */}
       <div className="flex shrink-0 items-center justify-between border-b border-(--ui-stroke-secondary) px-4 py-3">
-        <span className="text-xs font-semibold text-(--ui-text-secondary)">Task Details</span>
+        <span className="text-xs font-semibold text-(--ui-text-secondary)">{t.desktop.kanban.taskDetails}</span>
         <button
           className="flex h-6 w-6 items-center justify-center rounded text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)"
           onClick={onClose}
@@ -409,11 +451,11 @@ function TaskDetailPanel({
         <div className="mb-4 flex flex-wrap gap-2">
           <Badge variant="outline" className="flex items-center gap-1">
             <span className={cn('h-1.5 w-1.5 rounded-full', statusCol.color)} />
-            {statusCol.label}
+            {columnLabel(t, statusCol.id)}
           </Badge>
           <Badge variant="outline" className="flex items-center gap-1">
             <Codicon name={priority.icon} size="0.75rem" className={priority.color} />
-            {priority.label}
+            {priorityLabel(t, task.priority)}
           </Badge>
           {task.assignee && (
             <Badge variant="outline" className="flex items-center gap-1">
@@ -426,7 +468,7 @@ function TaskDetailPanel({
         {/* Status quick-change */}
         <div className="mb-4">
           <label className="mb-1 block text-[0.65rem] font-medium uppercase tracking-wider text-(--ui-text-tertiary)">
-            Move to
+            {t.desktop.kanban.moveTo}
           </label>
           <div className="flex flex-wrap gap-1">
             {STATUS_COLUMNS.map(col => (
@@ -440,7 +482,7 @@ function TaskDetailPanel({
                 )}
                 onClick={() => onStatusChange(col.id)}
               >
-                {col.label}
+                {columnLabel(t, col.id)}
               </button>
             ))}
           </div>
@@ -449,13 +491,13 @@ function TaskDetailPanel({
         {/* Archive button */}
         <Button variant="outline" size="sm" className="mb-4 w-full" onClick={onArchive}>
           <Codicon name="archive" size="0.75rem" />
-          Archive Task
+          {t.desktop.kanban.archiveTask}
         </Button>
 
         {/* Comments section */}
         <div className="border-t border-(--ui-stroke-secondary) pt-3">
           <h4 className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)">
-            Comments ({comments.length})
+            {t.desktop.kanban.comments(comments.length)}
           </h4>
           <div className="mb-3 flex flex-col gap-2">
             {comments.map(comment => (
@@ -479,7 +521,7 @@ function TaskDetailPanel({
               </div>
             ))}
             {comments.length === 0 && (
-              <p className="text-[0.6875rem] italic text-(--ui-text-tertiary/60)">No comments yet.</p>
+              <p className="text-[0.6875rem] italic text-(--ui-text-tertiary/60)">{t.desktop.kanban.noComments}</p>
             )}
           </div>
 
@@ -488,7 +530,7 @@ function TaskDetailPanel({
             <Textarea
               value={commentText}
               onChange={e => setCommentText(e.target.value)}
-              placeholder="Add a comment…"
+              placeholder={t.desktop.kanban.addCommentPlaceholder}
               rows={2}
               className="min-h-0 flex-1 text-xs"
             />
@@ -499,7 +541,7 @@ function TaskDetailPanel({
               onClick={handleSubmitComment}
               disabled={!commentText.trim()}
             >
-              Send
+              {t.desktop.kanban.send}
             </Button>
           </div>
         </div>
@@ -517,6 +559,7 @@ interface KanbanViewProps {
 }
 
 export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: KanbanViewProps) {
+  const { t } = useI18n()
   const [boards, setBoards] = useState<KanbanBoard[]>([])
   const [activeBoardId, setActiveBoardId] = useState<string>('default')
   const [tasks, setTasks] = useState<KanbanTask[]>([])
@@ -549,7 +592,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
         setActiveBoardId(boardList[0].id)
       }
     } catch (err) {
-      notifyError('Failed to load kanban data')
+      notifyError(new Error('Failed to load kanban data'), 'Failed to load kanban data')
       console.error(err)
     } finally {
       setLoading(false)
@@ -584,62 +627,107 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
   const tasksByStatus = useMemo(() => {
     const map: Record<string, KanbanTask[]> = {}
     for (const col of STATUS_COLUMNS) {
-      map[col.id] = boardTasks.filter(t => t.status === col.id)
+      map[col.id] = [...boardTasks.filter(t => t.status === col.id)]
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     }
     return map
   }, [boardTasks])
 
-  // Handle drag end - update task status/order
+  // Handle drag end — update task status and order with optimistic update
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       const { active, over } = event
       if (!over || active.id === over.id) return
 
-      const draggedTask = tasks.find(t => t.id === active.id)
-      const overTask = tasks.find(t => t.id === over.id)
+      const activeTask = tasks.find(t => t.id === active.id)
+      if (!activeTask) return
 
-      if (!draggedTask) return
+      // Determine target status
+      let targetStatus: KanbanStatus
+      let overIndex: number
 
-      // Determine target status from the column the item was dropped on
-      let targetStatus = draggedTask.status
-      if (overTask) {
-        targetStatus = overTask.status
+      if (typeof over.id === 'string' && over.id.startsWith('column:')) {
+        // Dropped on an empty column
+        targetStatus = over.id.replace('column:', '') as KanbanStatus
+        overIndex = (tasksByStatus[targetStatus] ?? []).length
+      } else {
+        // Dropped on another task
+        const overTask = tasks.find(t => t.id === over.id)
+        if (!overTask) return
+        targetStatus = overTask.status as KanbanStatus
+        const columnTasks = tasksByStatus[targetStatus] ?? []
+        overIndex = columnTasks.findIndex(t => t.id === over.id)
+        if (overIndex < 0) return
       }
 
-      // Update task status
-      if (targetStatus !== draggedTask.status) {
-        try {
-          const updated = await window.hermesDesktop.kanban.updateTask(draggedTask.id, { status: targetStatus })
-          setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
-        } catch {
-          notifyError('Failed to update task status')
-        }
+      const sourceStatus = activeTask.status as KanbanStatus
+      const sourceColumn = [...(tasksByStatus[sourceStatus] ?? [])]
+      const targetColumn = sourceStatus === targetStatus
+        ? sourceColumn
+        : [...(tasksByStatus[targetStatus] ?? [])]
+
+      // Remove active from source
+      const activeSourceIdx = sourceColumn.findIndex(t => t.id === active.id)
+      if (activeSourceIdx >= 0) sourceColumn.splice(activeSourceIdx, 1)
+
+      // Insert into target at position
+      const insertAt = Math.min(overIndex, targetColumn.length)
+      targetColumn.splice(insertAt, 0, activeTask)
+
+      // Generate updates
+      const updates: Array<{ id: string; status: KanbanStatus; order: number }> = []
+      const collectUpdates = (col: KanbanTask[], status: KanbanStatus) => {
+        col.forEach((t, idx) => {
+          if (t.status !== status || t.order !== idx) {
+            updates.push({ id: t.id, status, order: idx })
+          }
+        })
+      }
+
+      if (sourceStatus === targetStatus) {
+        collectUpdates(sourceColumn, sourceStatus)
       } else {
-        // Reorder within the same column
-        const columnTasks = tasksByStatus[targetStatus] ?? []
-        const oldIdx = columnTasks.findIndex(t => t.id === active.id)
-        const newIdx = columnTasks.findIndex(t => t.id === over.id)
-        if (oldIdx >= 0 && newIdx >= 0 && oldIdx !== newIdx) {
-          // In a real app we'd persist ordering; for now just update local
-          notify('Task reordered')
+        collectUpdates(sourceColumn, sourceStatus)
+        collectUpdates(targetColumn, targetStatus)
+      }
+
+      if (updates.length === 0) return
+
+      // Optimistic local update
+      const prevTasks = tasks
+      setTasks(prev => {
+        const next = [...prev]
+        for (const { id, status, order } of updates) {
+          const idx = next.findIndex(t => t.id === id)
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], status, order }
+          }
         }
+        return next
+      })
+
+      try {
+        await window.hermesDesktop.kanban.reorderTasks(activeBoardId, updates)
+      } catch {
+        setTasks(prevTasks)
+        notifyError(new Error('Failed to reorder tasks'), 'Failed to reorder tasks')
       }
     },
-    [tasks, tasksByStatus]
+    [tasks, tasksByStatus, activeBoardId]
   )
 
   // Create task
   const handleCreateTask = useCallback(
-    async (data: { title: string; description?: string; priority?: string; assignee?: string; status?: string }) => {
+    async (data: { title: string; description?: string; priority?: KanbanPriority; assignee?: string; status?: KanbanStatus }) => {
       try {
         const task = await window.hermesDesktop.kanban.createTask({
           boardId: activeBoardId,
           ...data
         })
         setTasks(prev => [...prev, task])
-        notify('Task created')
+        notify({ message: 'Task created' })
       } catch {
-        notifyError('Failed to create task')
+        notifyError(new Error('Failed to create task'), 'Failed to create task')
       }
     },
     [activeBoardId]
@@ -647,15 +735,15 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
 
   // Update task
   const handleUpdateTask = useCallback(
-    async (data: { title: string; description?: string; priority?: string; assignee?: string; status?: string }) => {
+    async (data: { title: string; description?: string; priority?: KanbanPriority; assignee?: string; status?: KanbanStatus }) => {
       if (!editingTask) return
       try {
         const updated = await window.hermesDesktop.kanban.updateTask(editingTask.id, data)
         setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
         setSelectedTask(prev => (prev?.id === updated.id ? updated : prev))
-        notify('Task updated')
+        notify({ message: 'Task updated' })
       } catch {
-        notifyError('Failed to update task')
+        notifyError(new Error('Failed to update task'), 'Failed to update task')
       }
     },
     [editingTask]
@@ -670,9 +758,9 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
       setSelectedTask(prev => (prev?.id === deletingTask.id ? null : prev))
       setDeletingTask(null)
       setShowDeleteConfirm(null)
-      notify('Task deleted')
+      notify({ message: 'Task deleted' })
     } catch {
-      notifyError('Failed to delete task')
+      notifyError(new Error('Failed to delete task'), 'Failed to delete task')
     }
   }, [deletingTask])
 
@@ -683,22 +771,22 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
       await window.hermesDesktop.kanban.updateTask(selectedTask.id, { archived: true })
       setTasks(prev => prev.filter(t => t.id !== selectedTask.id))
       setSelectedTask(null)
-      notify('Task archived')
+      notify({ message: 'Task archived' })
     } catch {
-      notifyError('Failed to archive task')
+      notifyError(new Error('Failed to archive task'), 'Failed to archive task')
     }
   }, [selectedTask])
 
   // Change task status (from detail panel)
   const handleStatusChange = useCallback(
-    async (status: string) => {
+    async (status: KanbanStatus) => {
       if (!selectedTask) return
       try {
         const updated = await window.hermesDesktop.kanban.updateTask(selectedTask.id, { status })
         setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
         setSelectedTask(updated)
       } catch {
-        notifyError('Failed to update status')
+        notifyError(new Error('Failed to update status'), 'Failed to update status')
       }
     },
     [selectedTask]
@@ -716,7 +804,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
         })
         setTaskComments(prev => [...prev, comment])
       } catch {
-        notifyError('Failed to add comment')
+        notifyError(new Error('Failed to add comment'), 'Failed to add comment')
       }
     },
     [selectedTask]
@@ -729,7 +817,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
         await window.hermesDesktop.kanban.deleteComment(commentId)
         setTaskComments(prev => prev.filter(c => c.id !== commentId))
       } catch {
-        notifyError('Failed to delete comment')
+        notifyError(new Error('Failed to delete comment'), 'Failed to delete comment')
       }
     },
     []
@@ -745,7 +833,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
       setNewBoardTitle('')
       setShowNewBoard(false)
     } catch {
-      notifyError('Failed to create board')
+      notifyError(new Error('Failed to create board'), 'Failed to create board')
     }
   }, [newBoardTitle])
 
@@ -774,7 +862,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
             value={activeBoardId}
             onChange={e => setActiveBoardId(e.target.value)}
           >
-            {boards.length === 0 && <option value="default">Default Board</option>}
+            {boards.length === 0 && <option value="default">{t.desktop.kanban.defaultBoard}</option>}
             {boards.map(board => (
               <option key={board.id} value={board.id}>
                 {board.title}
@@ -787,7 +875,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
         <button
           className="flex h-7 w-7 items-center justify-center rounded text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)"
           onClick={() => setShowNewBoard(!showNewBoard)}
-          title="New board"
+          title={t.desktop.kanban.newBoard}
         >
           <Codicon name="add" size="0.875rem" />
         </button>
@@ -798,7 +886,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
             <Input
               value={newBoardTitle}
               onChange={e => setNewBoardTitle(e.target.value)}
-              placeholder="Board name"
+              placeholder={t.desktop.kanban.boardName}
               className="h-7 w-40 text-xs"
               autoFocus
             />
@@ -806,7 +894,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
               Create
             </Button>
             <Button variant="ghost" size="xs" onClick={() => { setShowNewBoard(false); setNewBoardTitle('') }}>
-              Cancel
+              {t.desktop.kanban.cancel}
             </Button>
           </div>
         )}
@@ -823,12 +911,12 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
           }}
         >
           <Codicon name="add" size="0.75rem" />
-          New Task
+          {t.desktop.kanban.newTask}
         </Button>
 
         {/* Stats */}
         <span className="ml-auto text-[0.65rem] text-(--ui-text-tertiary)">
-          {boardTasks.length} task{boardTasks.length !== 1 ? 's' : ''}
+          {t.desktop.kanban.taskCount(boardTasks.length)}
         </span>
       </div>
 
@@ -852,6 +940,7 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
                 setDeletingTask(task)
                 setShowDeleteConfirm(task)
               }}
+              onSelectTask={task => setSelectedTask(task)}
             />
           ))}
         </DndContext>
@@ -893,18 +982,18 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
       <Dialog open={!!showDeleteConfirm} onOpenChange={open => { if (!open) { setShowDeleteConfirm(null); setDeletingTask(null) } }}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Delete Task</DialogTitle>
+            <DialogTitle>{t.desktop.kanban.deleteTask}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{showDeleteConfirm?.title}"? This action cannot be undone.
+              {t.desktop.kanban.deleteConfirm(showDeleteConfirm?.title ?? '')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => { setShowDeleteConfirm(null); setDeletingTask(null) }}>
-              Cancel
+              {t.desktop.kanban.cancel}
             </Button>
             <Button variant="destructive" onClick={() => void handleDeleteTask()}>
               <Codicon name="trash" size="0.75rem" />
-              Delete
+              {t.desktop.kanban.delete}
             </Button>
           </DialogFooter>
         </DialogContent>

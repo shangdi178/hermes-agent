@@ -132,22 +132,31 @@ declare global {
           boardId: string
           title: string
           description?: string
-          status?: string
-          priority?: string
+          status?: KanbanStatus
+          priority?: KanbanPriority
           assignee?: string
+          labels?: string[]
+          sessionId?: string
+          source?: 'manual' | 'chat' | 'agent' | 'cron'
         }) => Promise<KanbanTask>
         updateTask: (id: string, data: Partial<{
           title: string
           description: string
-          status: string
-          priority: string
+          status: KanbanStatus
+          priority: KanbanPriority
           assignee: string
           archived: boolean
+          labels: string[]
+          order: number
         }>) => Promise<KanbanTask>
         deleteTask: (id: string) => Promise<{ ok: boolean }>
         comments: (taskId: string) => Promise<KanbanComment[]>
         addComment: (data: { taskId: string; author: string; body: string }) => Promise<KanbanComment>
         deleteComment: (id: string) => Promise<{ ok: boolean }>
+        reorderTasks: (
+          boardId: string,
+          updates: Array<{ id: string; status: KanbanStatus; order: number }>
+        ) => Promise<KanbanTask[]>
       }
     }
   }
@@ -570,13 +579,17 @@ export interface KanbanTask {
   boardId: string
   title: string
   description: string
-  status: string
-  priority: string
+  status: KanbanStatus
+  priority: KanbanPriority
   assignee: string
   createdBy: string
   createdAt: number
   updatedAt: number
   archived: boolean
+  order: number
+  labels?: string[]
+  sessionId?: string
+  source?: 'manual' | 'chat' | 'agent' | 'cron'
 }
 
 export interface KanbanComment {
@@ -586,3 +599,7 @@ export interface KanbanComment {
   body: string
   createdAt: number
 }
+
+export type KanbanStatus = 'todo' | 'ready' | 'running' | 'review' | 'done' | 'blocked'
+
+export type KanbanPriority = 'low' | 'medium' | 'high'

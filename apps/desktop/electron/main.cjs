@@ -6639,7 +6639,8 @@ function ensureKanbanSchema(db) {
   for (const stmt of [
     "ALTER TABLE tasks ADD COLUMN board_id TEXT DEFAULT 'default'",
     "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE tasks ADD COLUMN updated_at INTEGER"
+    "ALTER TABLE tasks ADD COLUMN updated_at INTEGER",
+    "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
   ]) {
     try { db.exec(stmt) } catch { /* column already exists */ }
   }
@@ -6658,7 +6659,40 @@ function rowToKanbanTask(row) {
     createdBy: row.created_by || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
-    archived: Boolean(row.archived)
+    archived: Boolean(row.archived),
+    order: row.sort_order || 0
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Input sanitization
+// ---------------------------------------------------------------------------
+
+const VALID_STATUSES = new Set(['todo', 'ready', 'running', 'review', 'done', 'blocked'])
+const VALID_PRIORITIES = new Set(['low', 'medium', 'high'])
+
+function sanitizeString(value, maxLength) {
+  return String(value || '').trim().slice(0, maxLength)
+}
+
+function sanitizeStatus(value) {
+  return VALID_STATUSES.has(value) ? value : 'todo'
+}
+
+function sanitizePriority(value) {
+  return VALID_PRIORITIES.has(value) ? value : 'medium'
+}
+
+function sanitizeTaskInput(input) {
+  return {
+    title: sanitizeString(input.title, 200) || 'Untitled',
+    description: String(input.description || '').slice(0, 5000),
+    status: sanitizeStatus(input.status),
+    priority: sanitizePriority(input.priority),
+    assignee: sanitizeString(input.assignee, 120),
+    labels: Array.isArray(input.labels)
+      ? input.labels.map(label => sanitizeString(label, 40)).filter(Boolean).slice(0, 20)
+      : []
   }
 }
 
@@ -6678,23 +6712,32 @@ ipcMain.handle('hermes:kanban:boards', () => {
 
 ipcMain.handle('hermes:kanban:createBoard', (_event, { title, description }) => {
   const db = getKanbanDb()
-  const slug = (title || '')
+  const safeTitle = sanitizeString(title, 200) || 'Untitled Board'
+  const safeDesc = sanitizeString(description, 1000)
+  const slug = safeTitle
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '') || 'board'
   const id = newId()
   const now = Date.now()
   db.prepare('INSERT INTO kanban_boards (id, slug, title, description, created_at) VALUES (?, ?, ?, ?, ?)').run(
-    id, slug, String(title || ''), String(description || ''), now
+    id, slug, safeTitle, safeDesc, now
   )
-  return { id, title: String(title || ''), description: String(description || ''), createdAt: now }
+  return { id, title: safeTitle, description: safeDesc, createdAt: now }
 })
 
 ipcMain.handle('hermes:kanban:deleteBoard', (_event, id) => {
   const db = getKanbanDb()
-  db.prepare('DELETE FROM kanban_boards WHERE id = ?').run(id)
-  db.prepare("UPDATE tasks SET board_id = 'default' WHERE board_id = ?").run(id)
-  return { ok: true }
+  db.exec('BEGIN')
+  try {
+    db.prepare("UPDATE tasks SET board_id = 'default' WHERE board_id = ?").run(id)
+    db.prepare('DELETE FROM kanban_boards WHERE id = ?').run(id)
+    db.exec('COMMIT')
+    return { ok: true }
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
 })
 
 ipcMain.handle('hermes:kanban:tasks', (_event, boardId) => {
@@ -6711,18 +6754,19 @@ ipcMain.handle('hermes:kanban:allTasks', () => {
 
 ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
   const db = getKanbanDb()
+  const safe = sanitizeTaskInput(taskData)
   const id = newId()
   const now = Date.now()
-  const priority = PRIORITY_STR_TO_INT[taskData.priority] !== undefined ? PRIORITY_STR_TO_INT[taskData.priority] : 1
-  const assignee = taskData.assignee || ''
+  const priority = PRIORITY_STR_TO_INT[safe.priority] !== undefined ? PRIORITY_STR_TO_INT[safe.priority] : 1
+  const assignee = safe.assignee
 
   db.prepare(`INSERT INTO tasks
-    (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch')`).run(
+    (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch', 0)`).run(
     id,
-    taskData.title || 'Untitled',
-    taskData.description || '',
-    taskData.status || 'todo',
+    safe.title,
+    safe.description,
+    safe.status,
     priority,
     assignee,
     assignee,
@@ -6743,15 +6787,16 @@ ipcMain.handle('hermes:kanban:updateTask', (_event, id, updates) => {
   const assignments = []
   const params = []
 
-  if (updates.title !== undefined) { assignments.push('title = ?'); params.push(updates.title) }
-  if (updates.description !== undefined) { assignments.push('body = ?'); params.push(updates.description) }
-  if (updates.status !== undefined) { assignments.push('status = ?'); params.push(updates.status) }
-  if (updates.assignee !== undefined) { assignments.push('assignee = ?'); params.push(updates.assignee) }
+  if (updates.title !== undefined) { assignments.push('title = ?'); params.push(sanitizeString(updates.title, 200)) }
+  if (updates.description !== undefined) { assignments.push('body = ?'); params.push(String(updates.description).slice(0, 5000)) }
+  if (updates.status !== undefined) { assignments.push('status = ?'); params.push(sanitizeStatus(updates.status)) }
+  if (updates.assignee !== undefined) { assignments.push('assignee = ?'); params.push(sanitizeString(updates.assignee, 120)) }
   if (updates.priority !== undefined) {
-    const p = PRIORITY_STR_TO_INT[updates.priority]
+    const p = PRIORITY_STR_TO_INT[sanitizePriority(updates.priority)]
     if (p !== undefined) { assignments.push('priority = ?'); params.push(p) }
   }
   if (updates.archived !== undefined) { assignments.push('archived = ?'); params.push(updates.archived ? 1 : 0) }
+  if (updates.order !== undefined) { assignments.push('sort_order = ?'); params.push(Number(updates.order) || 0) }
 
   if (assignments.length > 0) {
     assignments.push('updated_at = ?')
@@ -6771,6 +6816,34 @@ ipcMain.handle('hermes:kanban:deleteTask', (_event, id) => {
   return { ok: true }
 })
 
+ipcMain.handle('hermes:kanban:reorderTasks', (_event, boardId, updates) => {
+  const db = getKanbanDb()
+  if (!Array.isArray(updates)) throw new Error('updates must be an array')
+
+  const stmt = db.prepare(
+    'UPDATE tasks SET status = ?, sort_order = ?, updated_at = ? WHERE id = ?'
+  )
+  const now = Date.now()
+
+  db.exec('BEGIN')
+  try {
+    for (const { id, status, order } of updates) {
+      const safeStatus = sanitizeStatus(status)
+      stmt.run(safeStatus, Number(order) || 0, now, id)
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+
+  // Return updated tasks for this board, sorted by order
+  const rows = db.prepare(
+    'SELECT * FROM tasks WHERE board_id = ? AND archived = 0 ORDER BY sort_order ASC, created_at ASC'
+  ).all(boardId)
+  return rows.map(rowToKanbanTask)
+})
+
 ipcMain.handle('hermes:kanban:comments', (_event, taskId) => {
   const db = getKanbanDb()
   const rows = db.prepare('SELECT id, task_id, author, body, created_at FROM task_comments WHERE task_id = ? ORDER BY created_at ASC').all(taskId)
@@ -6786,14 +6859,16 @@ ipcMain.handle('hermes:kanban:comments', (_event, taskId) => {
 ipcMain.handle('hermes:kanban:addComment', (_event, { taskId, author, body }) => {
   const db = getKanbanDb()
   const now = Date.now()
+  const safeAuthor = sanitizeString(author, 120)
+  const safeBody = String(body || '').slice(0, 5000)
   const result = db.prepare('INSERT INTO task_comments (task_id, author, body, created_at) VALUES (?, ?, ?, ?)').run(
-    taskId, String(author || ''), String(body || ''), now
+    taskId, safeAuthor, safeBody, now
   )
   return {
     id: result.lastInsertRowid.toString(),
     taskId,
-    author: String(author || ''),
-    body: String(body || ''),
+    author: safeAuthor,
+    body: safeBody,
     createdAt: now
   }
 })
