@@ -35,8 +35,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 import { useI18n } from '@/i18n'
-
-import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 // ---------------------------------------------------------------------------
@@ -239,14 +237,15 @@ function KanbanColumn({
 }) {
   const { t } = useI18n()
   const taskIds = useMemo(() => tasks.map(t => t.id), [tasks])
-  const { setNodeRef: columnDroppableRef } = useDroppable({
-    id: `column:${column.id}`
+  const { setNodeRef: columnDroppableRef, isOver } = useDroppable({
+    id: `column:${column.id}`,
+    data: { type: 'column', status: column.id }
   })
 
   return (
-    <div ref={columnDroppableRef} className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary)/40">
       {/* Column header */}
-      <div className="mb-3 flex shrink-0 items-center gap-2 px-1">
+      <div className="mb-3 flex shrink-0 items-center gap-2 px-3 pt-3">
         <span className={cn('h-2 w-2 shrink-0 rounded-full', column.color)} />
         <span className="text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary)">
           {columnLabel(t, column.id)}
@@ -258,13 +257,19 @@ function KanbanColumn({
 
       {/* Task list */}
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border border-dashed border-transparent p-1 transition-colors">
+        <div
+          ref={columnDroppableRef}
+          className={cn(
+            'flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 transition-colors',
+            isOver && 'bg-(--ui-bg-tertiary)'
+          )}
+        >
           {tasks.map(task => (
             <SortableTaskCard key={task.id} task={task} onEdit={onEditTask} onDelete={onDeleteTask} onSelect={onSelectTask} />
           ))}
           {tasks.length === 0 && (
-            <div className="flex flex-1 items-center justify-center">
-              <span className="text-[0.6875rem] text-(--ui-text-tertiary/50)">{t.desktop.kanban.dropTasksHere}</span>
+            <div className="flex flex-1 items-center justify-center rounded-md border border-dashed border-(--ui-stroke-secondary)">
+              <span className="text-[0.6875rem] text-(--ui-text-tertiary)">{t.desktop.kanban.dropTasksHere}</span>
             </div>
           )}
         </div>
@@ -842,13 +847,12 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-(--ui-bg-primary)">
       {/* Header toolbar */}
       <div
         className={cn(
           'flex shrink-0 items-center gap-3 border-b border-(--ui-stroke-secondary)',
-          'bg-(--ui-bg-primary) py-2',
-          PAGE_INSET_X
+          'bg-(--ui-bg-primary) px-4 py-2'
         )}
       >
         {/* Board selector */}
@@ -920,46 +924,53 @@ export function KanbanView({ setStatusbarItemGroup: _setStatusbarItemGroup }: Ka
         </span>
       </div>
 
-      {/* Kanban board columns */}
-      <div className="flex flex-1 gap-4 overflow-x-auto overflow-y-hidden p-4">
-        <DndContext
-          sensors={dndSensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          {STATUS_COLUMNS.map(column => (
-            <KanbanColumn
-              key={column.id}
-              column={column}
-              tasks={tasksByStatus[column.id] ?? []}
-              onEditTask={task => {
-                setEditingTask(task)
-                setDialogOpen(true)
-              }}
-              onDeleteTask={task => {
-                setDeletingTask(task)
-                setShowDeleteConfirm(task)
-              }}
-              onSelectTask={task => setSelectedTask(task)}
-            />
-          ))}
-        </DndContext>
-      </div>
-
-      {/* Detail panel (slides in on the right) */}
-      {selectedTask && (
-        <div className="absolute bottom-0 right-0 top-0 w-80">
-          <TaskDetailPanel
-            task={selectedTask}
-            comments={taskComments}
-            onClose={() => setSelectedTask(null)}
-            onAddComment={handleAddComment}
-            onDeleteComment={handleDeleteComment}
-            onArchive={handleArchiveTask}
-            onStatusChange={handleStatusChange}
-          />
+      {/* Workspace: board + detail panel */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* Board pane */}
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="h-full overflow-x-auto overflow-y-hidden p-4">
+            <DndContext
+              sensors={dndSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <div className="flex h-full min-w-max gap-4">
+                {STATUS_COLUMNS.map(column => (
+                  <KanbanColumn
+                    key={column.id}
+                    column={column}
+                    tasks={tasksByStatus[column.id] ?? []}
+                    onEditTask={task => {
+                      setEditingTask(task)
+                      setDialogOpen(true)
+                    }}
+                    onDeleteTask={task => {
+                      setDeletingTask(task)
+                      setShowDeleteConfirm(task)
+                    }}
+                    onSelectTask={task => setSelectedTask(task)}
+                  />
+                ))}
+              </div>
+            </DndContext>
+          </div>
         </div>
-      )}
+
+        {/* Detail panel */}
+        {selectedTask && (
+          <aside className="h-full w-80 shrink-0 overflow-hidden border-l border-(--ui-stroke-secondary) bg-(--ui-bg-primary)">
+            <TaskDetailPanel
+              task={selectedTask}
+              comments={taskComments}
+              onClose={() => setSelectedTask(null)}
+              onAddComment={handleAddComment}
+              onDeleteComment={handleDeleteComment}
+              onArchive={handleArchiveTask}
+              onStatusChange={handleStatusChange}
+            />
+          </aside>
+        )}
+      </div>
 
       {/* Create / Edit dialog */}
       <TaskDialog
