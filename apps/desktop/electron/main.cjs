@@ -6586,25 +6586,9 @@ ipcMain.handle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketpla
 ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
 
 // ===========================================================================
-// Kanban — simple JSON-backed kanban board data.
+// Kanban — SQLite-backed kanban board data, sharing DB with Hermes CLI.
 // ===========================================================================
-const KANBAN_JSON_PATH = path.join(HERMES_HOME, 'kanban.json')
-
-function readKanbanData() {
-  try {
-    if (fileExists(KANBAN_JSON_PATH)) {
-      return JSON.parse(fs.readFileSync(KANBAN_JSON_PATH, 'utf8'))
-    }
-  } catch {
-    // Corrupted or missing — start fresh.
-  }
-  return { boards: [], tasks: [], comments: [] }
-}
-
-function writeKanbanData(data) {
-  fs.mkdirSync(path.dirname(KANBAN_JSON_PATH), { recursive: true })
-  fs.writeFileSync(KANBAN_JSON_PATH, JSON.stringify(data, null, 2), 'utf8')
-}
+const KANBAN_DB_PATH = path.join(HERMES_HOME, 'kanban.db')
 
 function newId() {
   const ts = Date.now().toString(36)
@@ -6612,92 +6596,211 @@ function newId() {
   return `${ts}-${rnd}`
 }
 
+// Priority mapping: UI uses strings (high/medium/low), DB uses INTEGER.
+const PRIORITY_STR_TO_INT = { low: 0, medium: 1, high: 2 }
+const PRIORITY_INT_TO_STR = ['low', 'medium', 'high']
+
+/** @returns {import('node:sqlite').DatabaseSync} */
+let _kanbanDb = null
+function getKanbanDb() {
+  // Reconnect if prior connection was closed
+  if (_kanbanDb) {
+    try { _kanbanDb.prepare('SELECT 1').all(); return _kanbanDb }
+    catch { _kanbanDb = null }
+  }
+  const { DatabaseSync } = require('node:sqlite')
+  _kanbanDb = new DatabaseSync(KANBAN_DB_PATH)
+  _kanbanDb.exec('PRAGMA journal_mode=WAL')
+  _kanbanDb.exec('PRAGMA foreign_keys=ON')
+  ensureKanbanSchema(_kanbanDb)
+  return _kanbanDb
+}
+
+function ensureKanbanSchema(db) {
+  // kanban_boards — shared board table for the desktop kanban UI
+  db.exec(`CREATE TABLE IF NOT EXISTS kanban_boards (
+    id TEXT PRIMARY KEY,
+    slug TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at INTEGER NOT NULL
+  )`)
+
+  // Ensure a default board always exists
+  const existing = db.prepare("SELECT id FROM kanban_boards WHERE slug = ?").get('default')
+  if (!existing) {
+    db.prepare("INSERT INTO kanban_boards (id, slug, title, description, created_at) VALUES (?, ?, ?, ?, ?)").run(
+      newId(), 'default', 'Default Board', '', Date.now()
+    )
+  }
+
+  // Add columns to the CLI's tasks table that the kanban UI needs.
+  // ALTER TABLE ADD COLUMN is idempotent in SQLite (throws if column exists).
+  for (const stmt of [
+    "ALTER TABLE tasks ADD COLUMN board_id TEXT DEFAULT 'default'",
+    "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN updated_at INTEGER"
+  ]) {
+    try { db.exec(stmt) } catch { /* column already exists */ }
+  }
+}
+
+/** Convert a DB row to the UI-friendly KanbanTask shape. */
+function rowToKanbanTask(row) {
+  return {
+    id: row.id,
+    boardId: row.board_id || 'default',
+    title: row.title,
+    description: row.body || '',
+    status: row.status || 'todo',
+    priority: PRIORITY_INT_TO_STR[row.priority] || 'medium',
+    assignee: row.assignee || '',
+    createdBy: row.created_by || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+    archived: Boolean(row.archived)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IPC handlers
+// ---------------------------------------------------------------------------
+
 ipcMain.handle('hermes:kanban:boards', () => {
-  const data = readKanbanData()
-  return data.boards
+  const db = getKanbanDb()
+  return db.prepare('SELECT id, slug, title, description, created_at FROM kanban_boards ORDER BY created_at ASC').all().map(r => ({
+    id: r.id,
+    title: r.title,
+    description: r.description,
+    createdAt: r.created_at
+  }))
 })
 
 ipcMain.handle('hermes:kanban:createBoard', (_event, { title, description }) => {
-  const data = readKanbanData()
-  const board = { id: newId(), title: String(title || ''), description: String(description || ''), createdAt: Date.now() }
-  data.boards.push(board)
-  writeKanbanData(data)
-  return board
+  const db = getKanbanDb()
+  const slug = (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'board'
+  const id = newId()
+  const now = Date.now()
+  db.prepare('INSERT INTO kanban_boards (id, slug, title, description, created_at) VALUES (?, ?, ?, ?, ?)').run(
+    id, slug, String(title || ''), String(description || ''), now
+  )
+  return { id, title: String(title || ''), description: String(description || ''), createdAt: now }
 })
 
 ipcMain.handle('hermes:kanban:deleteBoard', (_event, id) => {
-  const data = readKanbanData()
-  data.boards = data.boards.filter(b => b.id !== id)
-  data.tasks = data.tasks.filter(t => t.boardId !== id)
-  data.comments = data.comments.filter(c => data.tasks.some(t => t.id === c.taskId))
-  writeKanbanData(data)
+  const db = getKanbanDb()
+  db.prepare('DELETE FROM kanban_boards WHERE id = ?').run(id)
+  db.prepare("UPDATE tasks SET board_id = 'default' WHERE board_id = ?").run(id)
   return { ok: true }
 })
 
 ipcMain.handle('hermes:kanban:tasks', (_event, boardId) => {
-  const data = readKanbanData()
-  return data.tasks.filter(t => t.boardId === boardId && !t.archived)
+  const db = getKanbanDb()
+  const rows = db.prepare('SELECT * FROM tasks WHERE board_id = ? AND archived = 0 ORDER BY created_at DESC').all(boardId)
+  return rows.map(rowToKanbanTask)
 })
 
 ipcMain.handle('hermes:kanban:allTasks', () => {
-  const data = readKanbanData()
-  return data.tasks.filter(t => !t.archived)
+  const db = getKanbanDb()
+  const rows = db.prepare('SELECT * FROM tasks WHERE archived = 0 ORDER BY created_at DESC').all()
+  return rows.map(rowToKanbanTask)
 })
 
 ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
-  const data = readKanbanData()
-  const task = {
-    id: newId(),
-    boardId: taskData.boardId || 'default',
-    title: taskData.title || 'Untitled',
-    description: taskData.description || '',
-    status: taskData.status || 'todo',
-    priority: taskData.priority || 'medium',
-    assignee: taskData.assignee || '',
-    createdBy: taskData.assignee || '',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    archived: false
-  }
-  data.tasks.push(task)
-  writeKanbanData(data)
-  return task
+  const db = getKanbanDb()
+  const id = newId()
+  const now = Date.now()
+  const priority = PRIORITY_STR_TO_INT[taskData.priority] !== undefined ? PRIORITY_STR_TO_INT[taskData.priority] : 1
+  const assignee = taskData.assignee || ''
+
+  db.prepare(`INSERT INTO tasks
+    (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch')`).run(
+    id,
+    taskData.title || 'Untitled',
+    taskData.description || '',
+    taskData.status || 'todo',
+    priority,
+    assignee,
+    assignee,
+    taskData.boardId || 'default',
+    now,
+    now
+  )
+
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+  return rowToKanbanTask(row)
 })
 
 ipcMain.handle('hermes:kanban:updateTask', (_event, id, updates) => {
-  const data = readKanbanData()
-  const idx = data.tasks.findIndex(t => t.id === id)
-  if (idx === -1) throw new Error(`Task ${id} not found`)
-  data.tasks[idx] = { ...data.tasks[idx], ...updates, updatedAt: Date.now() }
-  writeKanbanData(data)
-  return data.tasks[idx]
+  const db = getKanbanDb()
+  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+  if (!existing) throw new Error(`Task ${id} not found`)
+
+  const assignments = []
+  const params = []
+
+  if (updates.title !== undefined) { assignments.push('title = ?'); params.push(updates.title) }
+  if (updates.description !== undefined) { assignments.push('body = ?'); params.push(updates.description) }
+  if (updates.status !== undefined) { assignments.push('status = ?'); params.push(updates.status) }
+  if (updates.assignee !== undefined) { assignments.push('assignee = ?'); params.push(updates.assignee) }
+  if (updates.priority !== undefined) {
+    const p = PRIORITY_STR_TO_INT[updates.priority]
+    if (p !== undefined) { assignments.push('priority = ?'); params.push(p) }
+  }
+  if (updates.archived !== undefined) { assignments.push('archived = ?'); params.push(updates.archived ? 1 : 0) }
+
+  if (assignments.length > 0) {
+    assignments.push('updated_at = ?')
+    params.push(Date.now())
+    params.push(id)
+    db.prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?`).run(...params)
+  }
+
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+  return rowToKanbanTask(row)
 })
 
 ipcMain.handle('hermes:kanban:deleteTask', (_event, id) => {
-  const data = readKanbanData()
-  data.tasks = data.tasks.filter(t => t.id !== id)
-  data.comments = data.comments.filter(c => c.taskId !== id)
-  writeKanbanData(data)
+  const db = getKanbanDb()
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+  db.prepare('DELETE FROM task_comments WHERE task_id = ?').run(id)
   return { ok: true }
 })
 
 ipcMain.handle('hermes:kanban:comments', (_event, taskId) => {
-  const data = readKanbanData()
-  return data.comments.filter(c => c.taskId === taskId)
+  const db = getKanbanDb()
+  const rows = db.prepare('SELECT id, task_id, author, body, created_at FROM task_comments WHERE task_id = ? ORDER BY created_at ASC').all(taskId)
+  return rows.map(r => ({
+    id: String(r.id),
+    taskId: r.task_id,
+    author: r.author || '',
+    body: r.body || '',
+    createdAt: r.created_at
+  }))
 })
 
 ipcMain.handle('hermes:kanban:addComment', (_event, { taskId, author, body }) => {
-  const data = readKanbanData()
-  const comment = { id: newId(), taskId, author: String(author || ''), body: String(body || ''), createdAt: Date.now() }
-  data.comments.push(comment)
-  writeKanbanData(data)
-  return comment
+  const db = getKanbanDb()
+  const now = Date.now()
+  const result = db.prepare('INSERT INTO task_comments (task_id, author, body, created_at) VALUES (?, ?, ?, ?)').run(
+    taskId, String(author || ''), String(body || ''), now
+  )
+  return {
+    id: result.lastInsertRowid.toString(),
+    taskId,
+    author: String(author || ''),
+    body: String(body || ''),
+    createdAt: now
+  }
 })
 
 ipcMain.handle('hermes:kanban:deleteComment', (_event, id) => {
-  const data = readKanbanData()
-  data.comments = data.comments.filter(c => c.id !== id)
-  writeKanbanData(data)
+  const db = getKanbanDb()
+  db.prepare('DELETE FROM task_comments WHERE id = ?').run(Number(id))
   return { ok: true }
 })
 
