@@ -6651,6 +6651,16 @@ function ensureKanbanSchema(db) {
   ]) {
     try { db.exec(stmt) } catch { /* column already exists */ }
   }
+
+  // Migrate historical task board_ids from random IDs to slugs.
+  // Desktop earlier returned kanban_boards.id (random) to the renderer,
+  // while CLI/Agent tasks use board_id = 'default' (slug). This migration
+  // aligns all existing task board_ids with their board's slug so tasks
+  // are not filtered out by the renderer's boardId === activeBoardId check.
+  const boardsToMigrate = db.prepare("SELECT id, slug FROM kanban_boards WHERE id != slug").all()
+  for (const board of boardsToMigrate) {
+    db.prepare("UPDATE tasks SET board_id = ? WHERE board_id = ?").run(board.slug, board.id)
+  }
 }
 
 /** Convert a DB row to the UI-friendly KanbanTask shape. */
@@ -6720,7 +6730,7 @@ function sanitizeTaskInput(input) {
 ipcMain.handle('hermes:kanban:boards', () => {
   const db = getKanbanDb()
   return db.prepare('SELECT id, slug, title, description, created_at FROM kanban_boards ORDER BY created_at ASC').all().map(r => ({
-    id: r.id,
+    id: r.slug,
     title: r.title,
     description: r.description,
     createdAt: r.created_at
@@ -6740,15 +6750,15 @@ ipcMain.handle('hermes:kanban:createBoard', (_event, { title, description }) => 
   db.prepare('INSERT INTO kanban_boards (id, slug, title, description, created_at) VALUES (?, ?, ?, ?, ?)').run(
     id, slug, safeTitle, safeDesc, now
   )
-  return { id, title: safeTitle, description: safeDesc, createdAt: now }
+  return { id: slug, title: safeTitle, description: safeDesc, createdAt: now }
 })
 
-ipcMain.handle('hermes:kanban:deleteBoard', (_event, id) => {
+ipcMain.handle('hermes:kanban:deleteBoard', (_event, slug) => {
   const db = getKanbanDb()
   db.exec('BEGIN')
   try {
-    db.prepare("UPDATE tasks SET board_id = 'default' WHERE board_id = ?").run(id)
-    db.prepare('DELETE FROM kanban_boards WHERE id = ?').run(id)
+    db.prepare("UPDATE tasks SET board_id = 'default' WHERE board_id = ?").run(slug)
+    db.prepare('DELETE FROM kanban_boards WHERE slug = ?').run(slug)
     db.exec('COMMIT')
     return { ok: true }
   } catch (e) {
