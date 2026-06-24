@@ -98,8 +98,9 @@ import { cn } from '@/lib/utils'
 import { playSpeechText, stopVoicePlayback } from '@/lib/voice-playback'
 import { $compactionActive } from '@/store/compaction'
 import type { ComposerAttachment } from '@/store/composer'
-import { notifyError } from '@/store/notifications'
-import { $connection } from '@/store/session'
+import { notify, notifyError } from '@/store/notifications'
+import { $activeSessionId, $connection } from '@/store/session'
+import { $activeGatewayProfile } from '@/store/profile'
 import { notifyThreadEditClose, notifyThreadEditOpen } from '@/store/thread-scroll'
 import { $voicePlayback } from '@/store/voice-playback'
 
@@ -671,6 +672,29 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
   const { t } = useI18n()
   const copy = t.assistant.thread
   const [menuOpen, setMenuOpen] = useState(false)
+  const activeSessionId = useStore($activeSessionId)
+  const activeProfileId = useStore($activeGatewayProfile)
+
+  const handleCreateKanbanTask = useCallback(async () => {
+    const text = getMessageText()
+    if (!text.trim()) return
+    try {
+      await window.hermesDesktop.kanban.createTask({
+        boardId: 'default',
+        title: text.slice(0, 120),
+        description: text,
+        source: 'chat',
+        sessionId: activeSessionId ?? undefined,
+        profileId: activeProfileId,
+        assigneeType: 'user',
+        assigneeLabel: 'You',
+        syncMode: 'manual'
+      })
+      notify({ message: 'Kanban task created' })
+    } catch {
+      notifyError(new Error('Failed to create kanban task'), 'Failed to create kanban task')
+    }
+  }, [getMessageText, activeSessionId, activeProfileId])
 
   return (
     <div className="relative flex w-full shrink-0 justify-end">
@@ -705,6 +729,10 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
             <DropdownMenuItem onSelect={() => onBranchInNewChat?.(messageId)}>
               <GitBranchIcon />
               {copy.branchNewChat}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={handleCreateKanbanTask}>
+              <Codicon name="project" size="0.875rem" />
+              Create Kanban Task
             </DropdownMenuItem>
             <ReadAloudItem getText={getMessageText} messageId={messageId} />
           </DropdownMenuContent>

@@ -137,7 +137,18 @@ declare global {
           assignee?: string
           labels?: string[]
           sessionId?: string
-          source?: 'manual' | 'chat' | 'agent' | 'cron'
+          source?: KanbanTaskSource
+          profileId?: string
+          profileLabel?: string
+          messageId?: string
+          assigneeType?: KanbanAssigneeType
+          assigneeId?: string
+          assigneeLabel?: string
+          agentId?: string
+          agentLabel?: string
+          externalTaskId?: string
+          externalTaskKind?: string
+          syncMode?: string
         }) => Promise<KanbanTask>
         updateTask: (id: string, data: Partial<{
           title: string
@@ -589,7 +600,20 @@ export interface KanbanTask {
   order: number
   labels?: string[]
   sessionId?: string
-  source?: 'manual' | 'chat' | 'agent' | 'cron'
+  source?: KanbanTaskSource
+  profileId?: string
+  profileLabel?: string
+  messageId?: string
+  messageCreatedAt?: number
+  assigneeType: KanbanAssigneeType
+  assigneeId?: string
+  assigneeLabel?: string
+  agentId?: string
+  agentLabel?: string
+  externalTaskId?: string
+  externalTaskKind?: string
+  syncMode?: string
+  lastSyncedAt?: number
 }
 
 export interface KanbanComment {
@@ -603,3 +627,7 @@ export interface KanbanComment {
 export type KanbanStatus = 'todo' | 'ready' | 'running' | 'review' | 'done' | 'blocked'
 
 export type KanbanPriority = 'low' | 'medium' | 'high'
+
+export type KanbanAssigneeType = 'user' | 'agent' | 'unassigned'
+
+export type KanbanTaskSource = 'manual' | 'chat' | 'agent' | 'cron'

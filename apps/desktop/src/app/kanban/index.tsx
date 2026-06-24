@@ -35,6 +35,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 import { useI18n } from '@/i18n'
+import { useNavigate } from 'react-router-dom'
+import { sessionRoute } from '@/app/routes'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 // ---------------------------------------------------------------------------
@@ -63,7 +65,15 @@ interface KanbanTask {
   order: number
   labels?: string[]
   sessionId?: string
-  source?: 'manual' | 'chat' | 'agent' | 'cron'
+  source?: KanbanTaskSource
+  profileId?: string
+  profileLabel?: string
+  messageId?: string
+  assigneeType: KanbanAssigneeType
+  assigneeId?: string
+  assigneeLabel?: string
+  agentId?: string
+  syncMode?: string
 }
 
 interface KanbanComment {
@@ -76,6 +86,8 @@ interface KanbanComment {
 
 type KanbanStatus = 'todo' | 'ready' | 'running' | 'review' | 'done' | 'blocked'
 type KanbanPriority = 'low' | 'medium' | 'high'
+type KanbanAssigneeType = 'user' | 'agent' | 'unassigned'
+type KanbanTaskSource = 'manual' | 'chat' | 'agent' | 'cron'
 
 interface KanbanStatusColumn {
   id: KanbanStatus
@@ -417,6 +429,7 @@ function TaskDetailPanel({
   onStatusChange: (status: KanbanStatus) => void
 }) {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const [commentText, setCommentText] = useState('')
 
   const priority = PRIORITY_CONFIG[task.priority as keyof typeof PRIORITY_CONFIG] ?? PRIORITY_CONFIG.medium
@@ -469,6 +482,38 @@ function TaskDetailPanel({
             </Badge>
           )}
         </div>
+
+        {/* Source metadata */}
+        {(task.source || task.profileId || task.sessionId) && (
+          <div className="mb-4 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary) p-2.5">
+            <span className="mb-1.5 block text-[0.6rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)">
+              Metadata
+            </span>
+            <div className="flex flex-col gap-1 text-[0.6875rem] text-(--ui-text-secondary)">
+              {task.source && (
+                <div className="flex items-center gap-1.5">
+                  <Codicon name="repo" size="0.75rem" className="shrink-0 text-(--ui-text-tertiary)" />
+                  <span>Source: {task.source.charAt(0).toUpperCase() + task.source.slice(1)}</span>
+                </div>
+              )}
+              {task.assigneeLabel && (
+                <div className="flex items-center gap-1.5">
+                  <Codicon name="person" size="0.75rem" className="shrink-0 text-(--ui-text-tertiary)" />
+                  <span>Assignee: {task.assigneeLabel}</span>
+                </div>
+              )}
+              {task.sessionId && (
+                <button
+                  className="flex items-center gap-1.5 text-(--ui-text-secondary) hover:text-(--ui-text-primary)"
+                  onClick={(e) => { e.stopPropagation(); navigate(sessionRoute(task.sessionId!)) }}
+                >
+                  <Codicon name="link-external" size="0.75rem" className="shrink-0 text-(--ui-text-tertiary)" />
+                  Open conversation
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Status quick-change */}
         <div className="mb-4">

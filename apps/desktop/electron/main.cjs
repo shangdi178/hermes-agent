@@ -6640,7 +6640,14 @@ function ensureKanbanSchema(db) {
     "ALTER TABLE tasks ADD COLUMN board_id TEXT DEFAULT 'default'",
     "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN updated_at INTEGER",
-    "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+    "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'manual'",
+    "ALTER TABLE tasks ADD COLUMN session_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN profile_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN message_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN assignee_type TEXT DEFAULT 'unassigned'",
+    "ALTER TABLE tasks ADD COLUMN assignee_label TEXT",
+    "ALTER TABLE tasks ADD COLUMN sync_mode TEXT DEFAULT 'manual'"
   ]) {
     try { db.exec(stmt) } catch { /* column already exists */ }
   }
@@ -6660,7 +6667,14 @@ function rowToKanbanTask(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
     archived: Boolean(row.archived),
-    order: row.sort_order || 0
+    order: row.sort_order || 0,
+    source: row.source || 'manual',
+    sessionId: row.session_id || undefined,
+    profileId: row.profile_id || undefined,
+    messageId: row.message_id || undefined,
+    assigneeType: row.assignee_type || 'unassigned',
+    assigneeLabel: row.assignee_label || undefined,
+    syncMode: row.sync_mode || 'manual'
   }
 }
 
@@ -6684,6 +6698,9 @@ function sanitizePriority(value) {
 }
 
 function sanitizeTaskInput(input) {
+  const validSources = new Set(['manual', 'chat', 'agent', 'cron'])
+  const validAssigneeTypes = new Set(['user', 'agent', 'unassigned'])
+  const validSyncModes = new Set(['manual', 'linked', 'mirrored'])
   return {
     title: sanitizeString(input.title, 200) || 'Untitled',
     description: String(input.description || '').slice(0, 5000),
@@ -6761,8 +6778,10 @@ ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
   const assignee = safe.assignee
 
   db.prepare(`INSERT INTO tasks
-    (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch', 0)`).run(
+    (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind, sort_order,
+     source, session_id, profile_id, message_id, assignee_type, assignee_label, sync_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch', 0,
+     ?, ?, ?, ?, ?, ?, ?)`).run(
     id,
     safe.title,
     safe.description,
@@ -6772,7 +6791,14 @@ ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
     assignee,
     taskData.boardId || 'default',
     now,
-    now
+    now,
+    taskData.source || 'manual',
+    taskData.sessionId || null,
+    taskData.profileId || null,
+    taskData.messageId || null,
+    taskData.assigneeType || 'unassigned',
+    taskData.assigneeLabel || null,
+    taskData.syncMode || 'manual'
   )
 
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
