@@ -686,6 +686,7 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
         source: 'chat',
         sessionId: activeSessionId ?? undefined,
         profileId: activeProfileId,
+        messageId,
         assigneeType: 'user',
         assigneeLabel: 'You',
         syncMode: 'manual'
@@ -694,7 +695,7 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
     } catch {
       notifyError(new Error('Failed to create kanban task'), 'Failed to create kanban task')
     }
-  }, [getMessageText, activeSessionId, activeProfileId])
+  }, [getMessageText, activeSessionId, activeProfileId, messageId])
 
   return (
     <div className="relative flex w-full shrink-0 justify-end">
