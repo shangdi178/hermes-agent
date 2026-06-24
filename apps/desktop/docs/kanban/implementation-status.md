@@ -56,16 +56,22 @@ kanban.md
 - 空列 droppable。
 - 从 assistant 消息手动创建 Kanban task 的 MVP。
 - Task 元数据字段扩展：`source`、`sessionId`、`profileId`、`assigneeType`、`assigneeLabel`、`syncMode` 等。
+- Sidebar Kanban 名称显示 (Kanban / 看板)。
+- Chat task 创建时保存 `messageId`。
+- Board identity 统一为 slug，running task 不再被过滤。
+- 历史数据迁移：随机 board id → slug。
+- User message "..." 菜单：Create Kanban Task + Send plan to Kanban。
+- Agent plan 批量导入 Kanban（Send plan to Kanban，含 `externalTaskId`）。
+- Cron failure → blocked task（内存级去重）。
+- Agent todo linked/mirrored sync（更新 kanban task status + `lastSyncedAt`）。
+- `externalTaskId` / `externalTaskKind` / `lastSyncedAt` 持久化到 SQLite。
 
 当前仍未完成：
 
-- Agent plan / todo 自动进入 Kanban。
-- running / blocked / review / done 状态自动同步。
-- Cron failure 自动创建 blocked task。
-- Chat task 创建时精确保存 `messageId`。
-- 从 user message 或 selected text 创建 task。
-- 创建 Chat task 时选择目标 board。
-- Kanban sidebar / desktop navigation 显示名称。
+- full Agent workflow orchestration (自动创建/编排任务)
+- Agent 状态 mirrored sync（todo → kanban 的 linked sync 已基础完成）
+- Cron failure windowing（基础去重已完成，无 failure window）
+- 从 selected text 创建 task
 
 ## 3. 与旧文档的差异修正
 

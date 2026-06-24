@@ -6647,7 +6647,10 @@ function ensureKanbanSchema(db) {
     "ALTER TABLE tasks ADD COLUMN message_id TEXT",
     "ALTER TABLE tasks ADD COLUMN assignee_type TEXT DEFAULT 'unassigned'",
     "ALTER TABLE tasks ADD COLUMN assignee_label TEXT",
-    "ALTER TABLE tasks ADD COLUMN sync_mode TEXT DEFAULT 'manual'"
+    "ALTER TABLE tasks ADD COLUMN sync_mode TEXT DEFAULT 'manual'",
+    "ALTER TABLE tasks ADD COLUMN external_task_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN external_task_kind TEXT",
+    "ALTER TABLE tasks ADD COLUMN last_synced_at INTEGER"
   ]) {
     try { db.exec(stmt) } catch { /* column already exists */ }
   }
@@ -6684,7 +6687,10 @@ function rowToKanbanTask(row) {
     messageId: row.message_id || undefined,
     assigneeType: row.assignee_type || 'unassigned',
     assigneeLabel: row.assignee_label || undefined,
-    syncMode: row.sync_mode || 'manual'
+    syncMode: row.sync_mode || 'manual',
+    externalTaskId: row.external_task_id || undefined,
+    externalTaskKind: row.external_task_kind || undefined,
+    lastSyncedAt: row.last_synced_at || undefined
   }
 }
 
@@ -6786,12 +6792,16 @@ ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
   const now = Date.now()
   const priority = PRIORITY_STR_TO_INT[safe.priority] !== undefined ? PRIORITY_STR_TO_INT[safe.priority] : 1
   const assignee = safe.assignee
+  const lastSyncedAt = taskData.lastSyncedAt ||
+    (taskData.syncMode === 'linked' || taskData.syncMode === 'mirrored' ? now : null)
 
   db.prepare(`INSERT INTO tasks
     (id, title, body, status, priority, assignee, created_by, board_id, created_at, updated_at, archived, workspace_kind, sort_order,
-     source, session_id, profile_id, message_id, assignee_type, assignee_label, sync_mode)
+     source, session_id, profile_id, message_id, assignee_type, assignee_label, sync_mode,
+     external_task_id, external_task_kind, last_synced_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'scratch', 0,
-     ?, ?, ?, ?, ?, ?, ?)`).run(
+     ?, ?, ?, ?, ?, ?, ?,
+     ?, ?, ?)`).run(
     id,
     safe.title,
     safe.description,
@@ -6808,7 +6818,10 @@ ipcMain.handle('hermes:kanban:createTask', (_event, taskData) => {
     taskData.messageId || null,
     taskData.assigneeType || 'unassigned',
     taskData.assigneeLabel || null,
-    taskData.syncMode || 'manual'
+    taskData.syncMode || 'manual',
+    taskData.externalTaskId || null,
+    taskData.externalTaskKind || null,
+    lastSyncedAt
   )
 
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
@@ -6833,6 +6846,12 @@ ipcMain.handle('hermes:kanban:updateTask', (_event, id, updates) => {
   }
   if (updates.archived !== undefined) { assignments.push('archived = ?'); params.push(updates.archived ? 1 : 0) }
   if (updates.order !== undefined) { assignments.push('sort_order = ?'); params.push(Number(updates.order) || 0) }
+  if (updates.syncMode !== undefined) { assignments.push('sync_mode = ?'); params.push(updates.syncMode) }
+  if (updates.lastSyncedAt !== undefined) { assignments.push('last_synced_at = ?'); params.push(updates.lastSyncedAt) }
+  if (updates.externalTaskId !== undefined) { assignments.push('external_task_id = ?'); params.push(updates.externalTaskId) }
+  if (updates.externalTaskKind !== undefined) { assignments.push('external_task_kind = ?'); params.push(updates.externalTaskKind) }
+  if (updates.assigneeType !== undefined) { assignments.push('assignee_type = ?'); params.push(updates.assigneeType) }
+  if (updates.assigneeLabel !== undefined) { assignments.push('assignee_label = ?'); params.push(updates.assigneeLabel) }
 
   if (assignments.length > 0) {
     assignments.push('updated_at = ?')

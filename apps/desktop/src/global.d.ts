@@ -159,6 +159,14 @@ declare global {
           archived: boolean
           labels: string[]
           order: number
+          syncMode: string
+          lastSyncedAt: number
+          externalTaskId: string
+          externalTaskKind: string
+          assigneeType: KanbanAssigneeType
+          assigneeLabel: string
+          agentId: string
+          agentLabel: string
         }>) => Promise<KanbanTask>
         deleteTask: (id: string) => Promise<{ ok: boolean }>
         comments: (taskId: string) => Promise<KanbanComment[]>

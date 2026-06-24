@@ -41,11 +41,14 @@ export async function syncTodoToKanbanTasks(sessionId: string, todos: TodoItem[]
       )
 
       if (matchedTask && matchedTask.status !== kanbanStatus) {
-        await window.hermesDesktop.kanban.updateTask(matchedTask.id, { status: kanbanStatus as KanbanStatus })
+        await window.hermesDesktop.kanban.updateTask(matchedTask.id, {
+          status: kanbanStatus as KanbanStatus,
+          lastSyncedAt: Date.now()
+        })
       }
     }
-  } catch {
-    // Silently fail — sync is best-effort
+  } catch (e) {
+    console.warn('[kanban-sync] syncTodoToKanbanTasks failed:', e)
   }
 }
 
@@ -100,7 +103,7 @@ export async function syncCronFailureToKanban(jobs: Array<{ id: string; name?: s
 
       seenCronErrors.set(job.id, currentError)
     }
-  } catch {
-    // Silently fail — sync is best-effort
+  } catch (e) {
+    console.warn('[kanban-sync] syncCronFailureToKanban failed:', e)
   }
 }
