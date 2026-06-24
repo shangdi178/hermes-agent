@@ -101,6 +101,7 @@ import type { ComposerAttachment } from '@/store/composer'
 import { notify, notifyError } from '@/store/notifications'
 import { $activeSessionId, $connection } from '@/store/session'
 import { $activeGatewayProfile } from '@/store/profile'
+import { $todosBySession } from '@/store/todos'
 import { notifyThreadEditClose, notifyThreadEditOpen } from '@/store/thread-scroll'
 import { $voicePlayback } from '@/store/voice-playback'
 
@@ -674,13 +675,18 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
   const [menuOpen, setMenuOpen] = useState(false)
   const activeSessionId = useStore($activeSessionId)
   const activeProfileId = useStore($activeGatewayProfile)
+  const todosBySession = useStore($todosBySession)
+  const todos = activeSessionId ? (todosBySession[activeSessionId] ?? []) : []
+  const pendingTodos = todos.filter(t => t.status === 'pending' || t.status === 'in_progress')
 
   const handleCreateKanbanTask = useCallback(async () => {
     const text = getMessageText()
     if (!text.trim()) return
     try {
+      const boards = await window.hermesDesktop.kanban.boards()
+      const boardId = (boards[0]?.id) || 'default'
       await window.hermesDesktop.kanban.createTask({
-        boardId: 'default',
+        boardId,
         title: text.slice(0, 120),
         description: text,
         source: 'chat',
@@ -696,6 +702,36 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
       notifyError(new Error('Failed to create kanban task'), 'Failed to create kanban task')
     }
   }, [getMessageText, activeSessionId, activeProfileId, messageId])
+
+  const handleSendPlanToKanban = useCallback(async () => {
+    const todoItems = pendingTodos
+    if (todoItems.length === 0) return
+    try {
+      const boards = await window.hermesDesktop.kanban.boards()
+      const boardId = (boards[0]?.id) || 'default'
+      let created = 0
+      for (const todo of todoItems) {
+        await window.hermesDesktop.kanban.createTask({
+          boardId,
+          title: todo.content.slice(0, 120),
+          description: todo.content,
+          source: 'agent',
+          status: todo.status === 'in_progress' ? 'running' : 'todo',
+          sessionId: activeSessionId ?? undefined,
+          profileId: activeProfileId,
+          externalTaskId: todo.id,
+          externalTaskKind: 'agent_plan_item',
+          assigneeType: 'agent',
+          assigneeLabel: 'Hermes',
+          syncMode: 'linked'
+        })
+        created++
+      }
+      notify({ message: `${created} Kanban tasks created from plan` })
+    } catch {
+      notifyError(new Error('Failed to send plan to kanban'), 'Failed to send plan to kanban')
+    }
+  }, [pendingTodos, activeSessionId, activeProfileId])
 
   return (
     <div className="relative flex w-full shrink-0 justify-end">
@@ -735,6 +771,12 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
               <Codicon name="project" size="0.875rem" />
               Create Kanban Task
             </DropdownMenuItem>
+            {pendingTodos.length > 0 && (
+              <DropdownMenuItem onSelect={handleSendPlanToKanban}>
+                <Codicon name="checklist" size="0.875rem" />
+                Send plan to Kanban ({pendingTodos.length})
+              </DropdownMenuItem>
+            )}
             <ReadAloudItem getText={getMessageText} messageId={messageId} />
           </DropdownMenuContent>
         </DropdownMenu>
