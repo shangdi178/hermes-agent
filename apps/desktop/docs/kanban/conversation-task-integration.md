@@ -41,37 +41,37 @@ kanban.md                         # 定义 Kanban 是什么
 | 模块 | 完成状态 | 说明 | 是否需要重复开发 |
 | --- | --- | --- | --- |
 | Kanban 路由 | 已完成 | Desktop 已接入 `/kanban` 页面 | 不要重复 |
-| Kanban Renderer 页面 | 已完成基础版本 | 已有 `KanbanView`，但 GUI 仍需修复 | 不要重建，只做增量修复 |
-| Board CRUD | 已完成基础版本 | 已有 Board 创建、读取、删除能力 | 不要重复 |
-| Task CRUD | 已完成基础版本 | 已有 Task 创建、读取、更新、删除能力 | 不要重复 |
-| Comment CRUD | 已完成基础版本 | 已有评论读取、创建、删除能力 | 不要重复 |
-| preload Kanban API | 已完成基础版本 | 已暴露 `window.hermesDesktop.kanban` | 只增量扩展 |
-| main process JSON 存储 | 已完成基础版本 | 已写入 `HERMES_HOME/kanban.json` | 不要再建第二套存储 |
+| Kanban Renderer 页面 | 已完成 | 6 列看板、拖拽排序、详情面板、空列 drop | 不要重建 |
+| Board CRUD | 已完成 | Board 创建、读取、删除能力 | 不要重复 |
+| Task CRUD | 已完成 | Task 创建、读取、更新、删除能力 | 不要重复 |
+| Comment CRUD | 已完成 | 评论读取、创建、删除能力 | 不要重复 |
+| preload Kanban API | 已完成 | 含 `reorderTasks` 等 IPC | 只增量扩展 |
+| SQLite 存储 | 已完成 | `HERMES_HOME/kanban.db` | 不要回退 JSON |
 | Kanban 总开发文档 | 已完成 | `apps/desktop/docs/kanban.md` | 不要重复写总纲 |
 | GUI 修复计划文档 | 已完成 | `apps/desktop/docs/kanban/gui-remediation-plan.md` | 不要重复写 GUI 计划 |
+| Chat assistant message -> Kanban | 已完成 | 含 `messageId`/`sessionId`/`profileId` | 不要重复 |
+| Chat user message -> Kanban | 已完成 | "..." 菜单入口 | 不要重复 |
+| Agent plan 批量导入 | 已完成 | "Send plan to Kanban" | 不要重复 |
+| Cron failure -> blocked task | 已完成 | 基础去重 | 不要重复 |
+| Todo linked sync | 已完成 | todo 状态 -> Kanban status | 不要重复 |
+| external linkage 持久化 | 已完成 | `externalTaskId`/`lastSyncedAt` 写入 SQLite | 不要重复 |
+| Board identity 统一 | 已完成 | slug 替代随机 id, 含历史迁移 | 不要重复 |
 
 ### 2.2 部分完成
 
 | 模块 | 完成状态 | 当前问题 | 后续归属 |
 | --- | --- | --- | --- |
-| Kanban GUI | 部分完成 | 列宽、详情面板、空列拖拽、同列排序有问题 | `gui-remediation-plan.md` |
-| Task 详情面板 | 部分完成 | 有组件，但 Task card 点击打开详情链路不完整 | `gui-remediation-plan.md` |
-| 拖拽跨列 | 部分完成 | 只能依赖目标 task，空列不可靠 | `gui-remediation-plan.md` |
-| 同列排序 | 部分完成 | 当前缺少持久化排序 | `gui-remediation-plan.md` + `kanban.md` |
-| Task assignee | 部分完成 | 目前只是自由文本，不代表 profile 或 agent | 当前文档 |
+| Task assignee | 部分完成 | 新 task 使用 `assigneeType`/`assigneeLabel`，旧 task 仍可走自由文本 | 后续统一 |
+| mirrored sync | 部分完成 | linked sync 已完成，双向覆盖策略未实现 | 后续阶段 |
 
 ### 2.3 未完成
 
 | 模块 | 完成状态 | 说明 | 本文是否负责 |
 | --- | --- | --- | --- |
-| 从对话创建 Kanban Task | 未完成 | Chat message / selected text 尚不能直接生成 Kanban task | 是 |
-| 从 Agent plan 同步 Kanban Task | 未完成 | Agent todo / plan 尚未进入 Kanban | 是 |
-| 对话任务状态同步 | 未完成 | Agent 执行状态不会更新 Kanban task | 是 |
-| Task 关联 session | 未完成 | Kanban task 尚未可靠记录来源 conversation | 是 |
-| Task 关联 profile | 未完成 | Kanban task 尚未明确属于哪个 profile | 是 |
-| Agent 作为负责人 | 未完成 | assignee 尚未区分 user / agent | 是 |
-| 跳回原始对话 | 未完成 | Kanban task 尚不能导航回来源 session/message | 是 |
-| Cron failure 创建 blocked task | 未完成 | Cron 与 Kanban 尚未打通 | 后续阶段，是 |
+| 从 selected text 创建 Kanban Task | 未完成 | 需要 selection toolbar 机制 | 是 |
+| Agent 全自动同步编排 | 未完成 | 全自动 task 创建和管理 | 后续阶段 |
+| mirrored sync 双向覆盖 | 未完成 | 用户 override 策略未实现 | 后续阶段 |
+| Cron failure windowing | 未完成 | 时间窗口去重未实现 | 后续阶段 |
 
 ## 3. 不要重复开发清单
 
@@ -880,15 +880,15 @@ Profile state/store
 
 | 顺序 | 任务 | 文档归属 | 状态 | 是否可并行 |
 | --- | --- | --- | --- | --- |
-| 1 | 修复 Kanban GUI 基础显示 | `gui-remediation-plan.md` | 未完成 | 是，但建议优先 |
-| 2 | 明确 assignee/profile/source 类型 | 当前文档 | 未完成 | 可并行 |
-| 3 | 扩展 KanbanTask 元数据字段 | 当前文档 + `kanban.md` 同步 | 未完成 | 依赖 2 |
-| 4 | Chat message -> Create Kanban Task | 当前文档 | 未完成 | 依赖 3 |
-| 5 | Kanban detail -> Open source session | 当前文档 | 未完成 | 依赖 3 |
-| 6 | Agent plan -> Batch create tasks | 当前文档 | 未完成 | 依赖 3 |
-| 7 | linked sync | 当前文档 | 未完成 | 依赖 6 |
+| 1 | 修复 Kanban GUI 基础显示 | `gui-remediation-plan.md` | 已完成 | — |
+| 2 | 明确 assignee/profile/source 类型 | 当前文档 | 已完成 | — |
+| 3 | 扩展 KanbanTask 元数据字段 | 当前文档 + `kanban.md` 同步 | 已完成 | — |
+| 4 | Chat message -> Create Kanban Task | 当前文档 | 已完成 | — |
+| 5 | Kanban detail -> Open source session | 当前文档 | 已完成 | — |
+| 6 | Agent plan -> Batch create tasks | 当前文档 | 已完成 | — |
+| 7 | linked sync | 当前文档 | 已完成 | — |
 | 8 | mirrored sync | 当前文档 | 未完成 | 依赖 7 |
-| 9 | Cron failure -> blocked task | 当前文档 | 未完成 | 可后置 |
+| 9 | Cron failure -> blocked task | 当前文档 | 已完成 | — |
 
 ## 13. 最小不重复开发方案
 

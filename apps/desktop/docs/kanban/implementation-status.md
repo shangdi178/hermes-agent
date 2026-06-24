@@ -130,9 +130,9 @@ window.hermesDesktop.kanban.reorderTasks(boardId, updates)
 - 优化 optimistic update。
 - 确保和 SQLite `sort_order` 一致。
 
-### 3.3 GUI 第一轮修复已部分完成
+### 3.3 GUI 第一轮修复已完成
 
-`gui-remediation-plan.md` 中列出的核心 GUI 问题已有明显落地：
+`gui-remediation-plan.md` 中列出的核心 GUI 问题已全部落地：
 
 | GUI 项 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -141,229 +141,96 @@ window.hermesDesktop.kanban.reorderTasks(boardId, updates)
 | 详情面板改为右侧 pane | 已完成 | 不再使用 absolute overlay 覆盖 Board |
 | Task card 点击打开详情 | 已完成 | Card 支持 `onSelect` |
 | Droppable column | 已完成 | Column 注册 droppable id |
-| 空列 drop | 已完成基础版 | 空列可作为拖拽目标 |
-| 排序持久化 | 已完成基础版 | 已使用 `order` / `sort_order` 和 `reorderTasks` |
+| 空列 drop | 已完成 | 空列可作为拖拽目标 |
+| 排序持久化 | 已完成 | 已使用 `order` / `sort_order` 和 `reorderTasks` |
+| Sidebar 名称显示 | 已完成 | i18n 配置 `Kanban` / `看板` |
+| source/assignee metadata | 已完成 | Task detail 面板已显示来源信息 |
 
-仍需继续跟进：
+### 3.4 Conversation task integration 已落地
 
-- 侧边栏 / Desktop nav 中 Kanban 只有图标没有名称。
-- source / assignee metadata 的显示还不统一。
-- 部分 Kanban 文案仍可能未完全 i18n。
-- Chat 创建 task 后没有明确入口跳转到 Kanban。
+`conversation-task-integration.md` 的最小目标已全部实现：
 
-### 3.4 Conversation task integration 已完成 MVP，但未完成自动同步
-
-`conversation-task-integration.md` 的最小目标里，“从 Chat message 手动创建 Kanban task”已有 MVP。
-
-当前已完成：
+已完成：
 
 ```text
 assistant message action menu
   -> Create Kanban Task
   -> window.hermesDesktop.kanban.createTask(...)
-  -> source = chat
-  -> sessionId = active session
-  -> profileId = active gateway profile
-  -> assigneeType = user
-  -> assigneeLabel = You
+  -> source = chat, sessionId, profileId, messageId
+  -> assigneeType = user, assigneeLabel = You
   -> syncMode = manual
+
+user message action menu
+  -> Create Kanban Task (同上)
+
+Agent plan batch import
+  -> Send plan to Kanban (N)
+  -> each todo -> createTask with externalTaskId
+  -> source = agent, syncMode = linked
+
+Todo sync
+  -> linked/mirrored todo status -> Kanban task status
+  -> updates lastSyncedAt
+
+Cron failure sync
+  -> new cron error -> blocked task (内存级去重)
+  -> externalTaskId + externalTaskKind 持久化
 ```
 
-未完成：
+未完成（后续阶段）：
 
-- 创建时未保存 `messageId`。
-- 只对 assistant message 提供入口，未覆盖 user message。
-- 未提供 selected text -> task。
-- 默认写入 `default` board，未让用户选择 board。
-- 未做去重。
-- 未做 linked / mirrored sync。
-- 未接入 agent plan / todo。
+- 从 selected text 创建 task。
+- Agent 全自动编排。
+- full mirrored sync 的双向覆盖策略。
 
 ## 4. 当前完成情况总表
 
 | 模块 | 状态 | 后续动作 |
 | --- | --- | --- |
 | `/kanban` 路由 | 已完成 | 不要重复 |
-| Kanban 页面 | 已完成基础版 | 继续增量优化 |
-| Board CRUD | 已完成基础版 | 不要重复 |
-| Task CRUD | 已完成基础版 | 不要重复 |
-| Comment CRUD | 已完成基础版 | 不要重复 |
-| SQLite 存储 | 已完成 | 更新旧文档，不要回退 JSON |
-| `reorderTasks` | 已完成基础版 | 只做测试和边界优化 |
-| GUI 列宽 / 横向滚动 | 已完成 | 验证窄屏体验 |
-| 右侧详情面板 | 已完成 | 优化 metadata 展示 |
-| 空列拖拽 | 已完成基础版 | 增加测试 |
-| Chat message -> Kanban | 已完成 MVP | 补 `messageId`、board 选择、跳转 |
-| User message -> Kanban | 未完成 | 后续增量实现 |
+| Kanban 页面 | 已完成 | 继续增量优化 |
+| Board CRUD | 已完成 | 不要重复 |
+| Task CRUD | 已完成 | 不要重复 |
+| Comment CRUD | 已完成 | 不要重复 |
+| SQLite 存储 | 已完成 | 不要回退 JSON |
+| `reorderTasks` 排序持久化 | 已完成 | 边界优化 |
+| GUI 列宽 / 横向滚动 / 详情面板 | 已完成 | 窄屏验证 |
+| 空列拖拽 | 已完成 | — |
+| Sidebar Kanban 名称显示 | 已完成 | i18n `Kanban` / `看板` |
+| Chat message -> Kanban | 已完成 | 含 `messageId` / `sessionId` / `profileId` |
+| User message -> Kanban | 已完成 | 含 "..." 菜单 entry |
+| Board identity 统一 | 已完成 | slug 替代随机 id |
+| Agent plan -> Kanban | 已完成 | "Send plan to Kanban" 批量导入 |
+| Agent todo linked sync | 已完成 | todo 状态 -> Kanban status |
+| Cron failure -> blocked task | 已完成 | 内存级去重 |
+| external linkage 持久化 | 已完成 | `externalTaskId` / `lastSyncedAt` 写入 SQLite |
 | selected text -> Kanban | 未完成 | 后续增量实现 |
-| Agent plan -> Kanban | 未完成 | 不要先做自动同步，先做手动批量导入 |
-| Agent 状态同步 | 未完成 | 等 linked 模型稳定后做 |
-| Cron failure -> Kanban | 未完成 | 后置 |
-| Sidebar Kanban 名称显示 | 未完成 | 当前新增待办 |
+| Agent 全自动编排 | 未完成 | 后续阶段 |
+| mirrored sync 双向覆盖 | 未完成 | 后续阶段 |
+| Cron failure windowing | 未完成 | 后续阶段 |
 
-## 5. 新增问题：Desktop 界面 Kanban 只有图标，没有名称
+## 5. 已关闭问题
 
-### 5.1 问题描述
+> 以下问题已在之前实现中修复，此处留作历史记录，不再需要处理。
 
-当前 Desktop 左侧导航 / sidebar 中，Kanban 入口只显示图标，没有显示名称。
-
-从用户视角看：
-
-```text
-只有 checklist / 看板图标
-没有 “Kanban” 或 “看板” 文本
-```
-
-这会导致：
-
-- 新用户不知道该图标代表 Kanban。
-- Kanban 功能入口不明显。
-- 和其他有明确名称或可识别入口的功能相比，可发现性较差。
-
-### 5.2 代码定位
-
-该问题不在 `KanbanView` 页面内部。
-
-它属于 Desktop navigation / sidebar 层级。
-
-当前应优先检查：
-
-```text
-apps/desktop/src/app/chat/sidebar/index.tsx
-```
-
-其中 `SIDEBAR_NAV` 里 Kanban nav item 当前类似：
-
-```tsx
-{ id: 'kanban', label: '', icon: props => <Codicon name="checklist" {...props} />, route: KANBAN_ROUTE }
-```
-
-问题点：
-
-```text
-label: ''
-```
-
-这意味着即使 sidebar 组件支持 label，也没有可显示文本。
-
-### 5.3 不要重复开发
-
-不要为了解决这个问题新建第二个 Kanban 入口。
-
-不要新增：
-
-```text
-KanbanButton
-KanbanSidebar
-KanbanPanelLauncher
-```
-
-应直接修现有 nav item：
-
-```text
-SIDEBAR_NAV
-```
-
-并复用现有 sidebar 渲染逻辑。
-
-### 5.4 推荐修复方案
-
-第一步，给 Kanban nav item 设置非空 label：
-
-```tsx
-{ id: 'kanban', label: 'Kanban', icon: props => <Codicon name="checklist" {...props} />, route: KANBAN_ROUTE }
-```
-
-第二步，接入 i18n：
-
-```tsx
-label: t.desktop.kanban.navLabel
-```
-
-如果 `SIDEBAR_NAV` 是模块级常量，不能直接调用 hook，则可改为以下任一方案：
-
-方案 A：把 label 改成稳定 key：
-
-```ts
-labelKey: 'desktop.kanban.navLabel'
-```
-
-渲染时通过 i18n 解析。
-
-方案 B：把 `SIDEBAR_NAV` 改成工厂函数：
-
-```ts
-function sidebarNav(t: Translations): SidebarNavItem[] {
-  return [
-    ...,
-    { id: 'kanban', label: t.desktop.kanban.navLabel, icon: props => <Codicon name="checklist" {...props} />, route: KANBAN_ROUTE }
-  ]
-}
-```
-
-方案 C：如果 sidebar 设计上 rail 始终只显示图标，则至少确保 tooltip / aria-label 使用非空 label：
-
-```tsx
-aria-label="Kanban"
-title="Kanban"
-tooltip="Kanban"
-```
-
-### 5.5 推荐显示规范
-
-英文：
-
-```text
-Kanban
-```
-
-中文：
-
-```text
-看板
-```
-
-如果 sidebar 展开状态有文字，应显示：
-
-```text
-Kanban / 看板
-```
-
-如果 sidebar 收起状态只显示图标，应至少有 tooltip：
-
-```text
-hover icon -> Kanban / 看板
-```
-
-### 5.6 验收标准
-
-- Desktop sidebar 中 Kanban 入口不再只有图标。
-- 展开状态下能看到 `Kanban` 或 `看板`。
-- 收起状态下 hover 图标能看到 tooltip。
-- icon 仍然使用现有 checklist 图标，不新增第二个入口。
-- 点击入口仍然进入 `#/kanban`。
-- i18n 下英文显示 `Kanban`，中文显示 `看板`。
-- `npm run typecheck` 通过。
-- `npm run lint` 通过。
+- Sidebar Kanban 名称显示：已通过 i18n nav 添加 `Kanban` / `看板` 文案修复。
+- Chat task 未保存 messageId：`thread.tsx` 中已传入 `messageId` 参数。
+- Board identity 随机 id：已统一为 slug，含历史数据迁移。
+- Chat task 固定 `default` board：改为动态获取第一个可用 board。
 
 ## 6. 后续推荐优先级
 
-### P0：修正文档和导航可发现性
+### P0：已完成（Board identity + Sidebar 名称）
 
-1. 更新 `kanban.md` 的持久化章节，从 JSON 改成 SQLite。
-2. 修复 sidebar Kanban 只有图标没有名称的问题。
-3. 确认 sidebar label / tooltip / aria-label 都有正确文案。
+- ~~Board identity 统一 slug~~ ✅ 已修复
+- ~~Sidebar Kanban 名称显示~~ ✅ 已修复
+- ~~external linkage 持久化~~ ✅ 已修复
 
-### P1：补齐 Chat -> Kanban MVP 的关键缺口
+### P1：接近完成
 
-1. Chat 创建 task 时写入 `messageId`。
-2. 创建成功后提供 “Open in Kanban”。
-3. 创建时不要永远写入 `default` board，至少支持选择或最近 board。
-4. 添加基本去重，避免同一 message 连续创建重复 task。
+统一 assignee 语义：
 
-### P2：统一 assignee 语义
-
-1. Card 和 detail panel 都使用统一显示函数：
+1. Card 和 detail panel 使用统一显示函数：
 
 ```ts
 const displayAssignee = task.assigneeLabel || task.assignee || t.desktop.kanban.unassigned
@@ -379,12 +246,17 @@ assigneeLabel
 
 3. 明确 profile 只作为上下文，不作为 assignee。
 
-### P3：Agent / Cron 集成
+### P2：已完成（Agent / Cron 基础集成）
 
-1. 先做 Agent plan 手动批量导入。
-2. 再做 linked sync。
-3. 最后做 mirrored sync。
-4. Cron failure -> blocked task 后置。
+- ~~Agent plan 手动批量导入~~ ✅ 已完成
+- ~~Linked sync（todo status → kanban status）~~ ✅ 已完成
+- ~~Cron failure → blocked task~~ ✅ 已完成
+
+### P3：仍未完成
+
+- Mirrored sync 双向覆盖策略
+- Cron failure windowing
+- Selected text → Kanban
 
 ## 7. 不要重复开发清单
 
@@ -400,16 +272,4 @@ assigneeLabel
 
 ## 8. 当前最小下一步
 
-最小下一步建议只做两个补丁：
-
-```text
-Patch 1: docs
-  - 更新 kanban.md 的存储章节为 SQLite
-  - 保留 implementation-status.md 作为状态修正索引
-
-Patch 2: sidebar nav
-  - 给 SIDEBAR_NAV 的 kanban item 增加 label / tooltip / aria-label
-  - 增加 i18n 文案：en=Kanban, zh=看板
-```
-
-完成这两个补丁后，文档和 Desktop 入口可发现性会先对齐，后续再继续推进 Chat / Agent / Cron 集成。
+以上 P0/P1/P2 项已全部完成。当前文档体系已与实际代码状态对齐。
