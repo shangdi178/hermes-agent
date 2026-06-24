@@ -225,87 +225,131 @@ const STATUS_COLUMNS = [
 
 ## 6. 本地持久化设计
 
-### 6.1 文件路径
+### 6.1 数据库路径
 
-初期使用本地 JSON 文件：
-
-```js
-const KANBAN_JSON_PATH = path.join(HERMES_HOME, 'kanban.json')
-```
-
-### 6.2 推荐文件结构
-
-```json
-{
-  "schemaVersion": 1,
-  "boards": [],
-  "tasks": [],
-  "comments": []
-}
-```
-
-### 6.3 读取逻辑
+当前使用 SQLite 作为 Kanban 存储层，与 Hermes CLI 共享同一个数据库文件：
 
 ```js
-function readKanbanData() {
-  try {
-    if (fileExists(KANBAN_JSON_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(KANBAN_JSON_PATH, 'utf8'))
-      return normalizeKanbanData(parsed)
-    }
-  } catch {
-    // Corrupted or missing — start fresh.
-  }
-
-  return { schemaVersion: 1, boards: [], tasks: [], comments: [] }
-}
+const KANBAN_DB_PATH = path.join(HERMES_HOME, 'kanban.db')
 ```
 
-### 6.4 写入逻辑
+### 6.2 数据库表结构
 
-推荐原子写入，避免进程异常退出时破坏原文件：
+#### kanban_boards — 看板表
 
-```js
-function writeKanbanData(data) {
-  fs.mkdirSync(path.dirname(KANBAN_JSON_PATH), { recursive: true })
-  const normalized = normalizeKanbanData(data)
-  const tmpPath = `${KANBAN_JSON_PATH}.tmp`
-  fs.writeFileSync(tmpPath, JSON.stringify(normalized, null, 2), 'utf8')
-  fs.renameSync(tmpPath, KANBAN_JSON_PATH)
-}
+```sql
+CREATE TABLE IF NOT EXISTS kanban_boards (
+  id TEXT PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  created_at INTEGER NOT NULL
+)
 ```
 
-### 6.5 Migration
+说明：
 
-后续如果数据结构变化，使用 `schemaVersion` 做迁移：
+- `id` 是内部主键，由 `Date.now().toString(36) + crypto.randomBytes(8).toString('hex')` 生成。
+- `slug` 是业务 identity，从 title 经过 lowercase + 去除非字母数字字符生成。
+- Renderer 层使用 `slug` 作为 `KanbanBoard.id`。
+
+#### tasks — 任务表（Hermes CLI 和 Desktop 共用）
+
+Desktop 通过 ALTER TABLE 为 CLI 的 `tasks` 表补充以下列：
+
+```sql
+ALTER TABLE tasks ADD COLUMN board_id TEXT DEFAULT 'default'
+ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0
+ALTER TABLE tasks ADD COLUMN updated_at INTEGER
+ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0
+ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'manual'
+ALTER TABLE tasks ADD COLUMN session_id TEXT
+ALTER TABLE tasks ADD COLUMN profile_id TEXT
+ALTER TABLE tasks ADD COLUMN message_id TEXT
+ALTER TABLE tasks ADD COLUMN assignee_type TEXT DEFAULT 'unassigned'
+ALTER TABLE tasks ADD COLUMN assignee_label TEXT
+ALTER TABLE tasks ADD COLUMN sync_mode TEXT DEFAULT 'manual'
+```
+
+所有 ALTER TABLE 是幂等的（列已存在时静默跳过）。
+
+#### task_comments — 评论表
+
+CLI 侧已有，Desktop 直接使用：
+
+```sql
+CREATE TABLE IF NOT EXISTS task_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,
+  author TEXT,
+  body TEXT,
+  created_at INTEGER NOT NULL
+)
+```
+
+### 6.3 数据模型映射
+
+DB 行通过 `rowToKanbanTask()` 映射为 UI 友好的 `KanbanTask`：
 
 ```js
-function normalizeKanbanData(data) {
-  if (!data || typeof data !== 'object') {
-    return { schemaVersion: 1, boards: [], tasks: [], comments: [] }
-  }
-
-  const schemaVersion = Number(data.schemaVersion || 0)
-
-  if (schemaVersion < 1) {
-    return {
-      schemaVersion: 1,
-      boards: Array.isArray(data.boards) ? data.boards : [],
-      tasks: Array.isArray(data.tasks)
-        ? data.tasks.map((task, index) => ({ order: index, ...task }))
-        : [],
-      comments: Array.isArray(data.comments) ? data.comments : []
-    }
-  }
-
+function rowToKanbanTask(row) {
   return {
-    schemaVersion: 1,
-    boards: Array.isArray(data.boards) ? data.boards : [],
-    tasks: Array.isArray(data.tasks) ? data.tasks : [],
-    comments: Array.isArray(data.comments) ? data.comments : []
+    id: row.id,
+    boardId: row.board_id || 'default',    // board slug
+    title: row.title,
+    description: row.body || '',
+    status: row.status || 'todo',
+    priority: PRIORITY_INT_TO_STR[row.priority] || 'medium',
+    assignee: row.assignee || '',
+    createdBy: row.created_by || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+    archived: Boolean(row.archived),
+    order: row.sort_order || 0,
+    source: row.source || 'manual',
+    sessionId: row.session_id || undefined,
+    profileId: row.profile_id || undefined,
+    messageId: row.message_id || undefined,
+    assigneeType: row.assignee_type || 'unassigned',
+    assigneeLabel: row.assignee_label || undefined,
+    syncMode: row.sync_mode || 'manual'
   }
 }
 ```
+
+### 6.4 连接管理
+
+首次访问时延迟初始化 SQLite 连接：
+
+```js
+function getKanbanDb() {
+  if (_kanbanDb) {
+    try { _kanbanDb.prepare('SELECT 1').all(); return _kanbanDb }
+    catch { _kanbanDb = null }  // 断连后重建
+  }
+  const { DatabaseSync } = require('node:sqlite')
+  _kanbanDb = new DatabaseSync(KANBAN_DB_PATH)
+  _kanbanDb.exec('PRAGMA journal_mode=WAL')
+  _kanbanDb.exec('PRAGMA foreign_keys=ON')
+  ensureKanbanSchema(_kanbanDb)
+  return _kanbanDb
+}
+```
+
+### 6.5 Schema 初始化与数据迁移
+
+`ensureKanbanSchema()` 在首次连接时执行：
+
+1. 创建 `kanban_boards` 表（如不存在）。
+2. 确保 `slug = 'default'` 的默认 board 存在。
+3. 为 `tasks` 表补充 Desktop 所需的列。
+4. **历史数据迁移**：将旧 task 的 `board_id` 从随机 ID 统一为对应 board 的 slug，保证 Renderer 侧 `task.boardId === activeBoardId` 正确匹配。
+
+### 6.6 与旧 JSON 方案的差异
+
+> 早期方案使用 `HERMES_HOME/kanban.json`，当前已全部迁移到 SQLite。
+>
+> 后续开发不要再实现 JSON 写入逻辑，也不要再新增 `kanban.json`。
 
 ## 7. IPC 设计
 
