@@ -785,6 +785,94 @@ const AssistantActionBar: FC<MessageActionProps> = ({ messageId, getMessageText,
   )
 }
 
+const UserMessageActionMenu: FC<{ messageId: string; messageText: string }> = ({ messageId, messageText }) => {
+  const { t } = useI18n()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const activeSessionId = useStore($activeSessionId)
+  const activeProfileId = useStore($activeGatewayProfile)
+  const todosBySession = useStore($todosBySession)
+  const todos = activeSessionId ? (todosBySession[activeSessionId] ?? []) : []
+  const pendingTodos = todos.filter(t => t.status === 'pending' || t.status === 'in_progress')
+
+  const handleCreateKanbanTask = useCallback(async () => {
+    if (!messageText.trim()) return
+    try {
+      const boards = await window.hermesDesktop.kanban.boards()
+      const boardId = (boards[0]?.id) || 'default'
+      await window.hermesDesktop.kanban.createTask({
+        boardId,
+        title: messageText.slice(0, 120),
+        description: messageText,
+        source: 'chat',
+        sessionId: activeSessionId ?? undefined,
+        profileId: activeProfileId,
+        messageId,
+        assigneeType: 'user',
+        assigneeLabel: 'You',
+        syncMode: 'manual'
+      })
+      notify({ message: 'Kanban task created' })
+    } catch {
+      notifyError(new Error('Failed to create kanban task'), 'Failed to create kanban task')
+    }
+  }, [messageText, activeSessionId, activeProfileId, messageId])
+
+  const handleSendPlanToKanban = useCallback(async () => {
+    if (pendingTodos.length === 0) return
+    try {
+      const boards = await window.hermesDesktop.kanban.boards()
+      const boardId = (boards[0]?.id) || 'default'
+      let created = 0
+      for (const todo of pendingTodos) {
+        await window.hermesDesktop.kanban.createTask({
+          boardId,
+          title: todo.content.slice(0, 120),
+          description: todo.content,
+          source: 'agent',
+          status: todo.status === 'in_progress' ? 'running' : 'todo',
+          sessionId: activeSessionId ?? undefined,
+          profileId: activeProfileId,
+          externalTaskId: todo.id,
+          externalTaskKind: 'agent_plan_item',
+          assigneeType: 'agent',
+          assigneeLabel: 'Hermes',
+          syncMode: 'linked'
+        })
+        created++
+      }
+      notify({ message: `${created} Kanban tasks created from plan` })
+    } catch {
+      notifyError(new Error('Failed to send plan to kanban'), 'Failed to send plan to kanban')
+    }
+  }, [pendingTodos, activeSessionId, activeProfileId])
+
+  return (
+    <DropdownMenu onOpenChange={setMenuOpen} open={menuOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn('pointer-events-auto flex size-5 items-center justify-center rounded text-(--ui-text-tertiary) opacity-70 hover:bg-(--chrome-action-hover) hover:opacity-100', menuOpen && 'opacity-100')}
+          title="More actions"
+          type="button"
+        >
+          <Codicon name="ellipsis" size="0.75rem" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" onCloseAutoFocus={e => e.preventDefault()} sideOffset={4}>
+        <DropdownMenuItem onSelect={handleCreateKanbanTask}>
+          <Codicon name="project" size="0.875rem" />
+          Create Kanban Task
+        </DropdownMenuItem>
+        {pendingTodos.length > 0 && (
+          <DropdownMenuItem onSelect={handleSendPlanToKanban}>
+            <Codicon name="checklist" size="0.875rem" />
+            Send plan to Kanban ({pendingTodos.length})
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 const ReadAloudItem: FC<{ getText: () => string; messageId: string }> = ({ getText, messageId }) => {
   const { t } = useI18n()
   const copy = t.assistant.thread
@@ -1121,6 +1209,12 @@ const UserMessage: FC<{
                       <Codicon name="discard" size="0.875rem" />
                     </button>
                   )}
+                </div>
+              )}
+              {/* User message action menu */}
+              {hasBody && (
+                <div className="absolute right-2 top-2 z-10 flex items-center justify-center opacity-0 transition-opacity group-hover/user-message:opacity-100 group-focus-within/user-message:opacity-100">
+                  <UserMessageActionMenu messageId={messageId} messageText={messageText} />
                 </div>
               )}
             </div>
